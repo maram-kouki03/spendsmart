@@ -476,6 +476,6 @@ All routes are under `/api`. Except for the public auth routes, every request ne
 
 <div align="center">
 
-Made with ☕ and 🪙 by **[NAME]** · [University / course] · [DATE]
+
 
 </div>
