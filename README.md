@@ -20,7 +20,7 @@ A personal finance web app for students: cards and cash in one place, budgets th
 
 <br>
 
-**Student:** [NAME] · **Supervisor:** [NAME] · **University / course:** [NAME] · **Date:** [DATE]
+**Students:** Maram Kouki · Emna Borchani · Imen Khedimallah
 
 </div>
 
