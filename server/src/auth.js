@@ -1,32 +1,106 @@
-import { db } from './supabase.js';
+import crypto from 'node:crypto';
+import jwt from 'jsonwebtoken';
+import { one, tx } from './db.js';
+import { createStarterSources } from './lib/finance.js';
 
-/** Verifies the Supabase access token and loads the caller's profile. */
-export async function requireAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Not signed in' });
+export const COOKIE = 'ss_session';
+const PROD = process.env.NODE_ENV === 'production';
+const DAY = 86400000;
+const JWT_TTL = '7d';
+const REMEMBER_MS = 30 * DAY;
+const RENEW_AFTER_S = 24 * 3600; // re-sign a token once it's a day old, so active sessions stay alive
 
-  const { data, error } = await db.auth.getUser(token);
-  if (error || !data?.user) return res.status(401).json({ error: 'Session expired — please log in again' });
-
-  const user = data.user;
-  let { data: profile } = await db.from('profiles').select('*').eq('id', user.id).maybeSingle();
-  if (!profile) {
-    // Profile trigger missed (e.g. user created before the migration ran): create it now.
-    const { data: created, error: e2 } = await db
-      .from('profiles')
-      .insert({ id: user.id, email: user.email, full_name: user.user_metadata?.full_name || user.user_metadata?.name || '' })
-      .select()
-      .single();
-    if (e2) return next(e2);
-    await db.from('sources').insert([
-      { user_id: user.id, name: 'Card 1', kind: 'debit', style: 'g1', position: 0 },
-      { user_id: user.id, name: 'Card 2', kind: 'credit', style: 'g2', position: 1 },
-      { user_id: user.id, name: 'Cash Wallet', kind: 'cash', style: 'g3', position: 2 }
-    ]);
-    profile = created;
+let SECRET = process.env.JWT_SECRET;
+if (!SECRET) {
+  if (PROD) {
+    console.error('Missing JWT_SECRET. Set a long random value in server/.env.');
+    process.exit(1);
   }
-  req.user = user;
-  req.profile = profile;
-  next();
+  SECRET = crypto.randomBytes(48).toString('hex');
+  console.warn('JWT_SECRET is not set: using a temporary secret, so everyone is logged out when the server restarts.');
+}
+
+const cookieBase = { httpOnly: true, sameSite: 'lax', secure: PROD, path: '/' };
+
+/**
+ * A short fingerprint of the password hash goes into the token, so changing or resetting the
+ * password invalidates every other session without needing a sessions table.
+ */
+const fingerprint = (hash) => crypto.createHash('sha256').update(hash || 'no-password').digest('base64url').slice(0, 16);
+
+/** Signs a 7-day JWT and sets it as an httpOnly cookie: a session cookie, or 30 days with "remember me". */
+export function issueSession(res, user, remember) {
+  const token = jwt.sign({ sub: user.id, rem: remember ? 1 : 0, pf: fingerprint(user.password_hash) }, SECRET, { expiresIn: JWT_TTL, algorithm: 'HS256' });
+  res.cookie(COOKIE, token, remember ? { ...cookieBase, maxAge: REMEMBER_MS } : cookieBase);
+}
+
+export function clearSession(res) {
+  res.clearCookie(COOKIE, cookieBase);
+}
+
+/** What the client sees about the signed-in user (never the password hash). */
+export function publicUser(u, profile) {
+  return {
+    id: u.id,
+    email: u.email,
+    full_name: profile?.full_name ?? u.full_name ?? '',
+    has_password: !!u.password_hash,
+    google: !!u.google_id,
+    email_verified: !!u.email_verified_at,
+    created_at: u.created_at
+  };
+}
+
+async function loadUser(id) {
+  return one(
+    `select u.id, u.email, u.full_name, u.password_hash, u.google_id, u.email_verified_at, u.created_at,
+            case when p.id is null then null else to_jsonb(p) end as profile
+       from public.users u
+       left join public.profiles p on p.id = u.id
+      where u.id = $1`,
+    [id]
+  );
+}
+
+/** Reads the session cookie, verifies the JWT and loads req.user and req.profile from the database. */
+export async function requireAuth(req, res, next) {
+  try {
+    const token = req.cookies?.[COOKIE];
+    if (!token) return res.status(401).json({ error: 'Not signed in' });
+
+    let payload;
+    try {
+      payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
+    } catch {
+      clearSession(res);
+      return res.status(401).json({ error: 'Session expired — please log in again' });
+    }
+
+    const row = await loadUser(payload.sub);
+    if (!row || payload.pf !== fingerprint(row.password_hash)) {
+      clearSession(res);
+      return res.status(401).json({ error: 'Session expired — please log in again' });
+    }
+
+    let profile = row.profile;
+    if (!profile) {
+      // Shouldn't happen (register creates both), but recover rather than lock the user out.
+      profile = await tx(async (c) => {
+        const p = await one('insert into public.profiles (id, full_name, email) values ($1, $2, $3) on conflict (id) do nothing returning *',
+          [row.id, row.full_name, row.email], c);
+        if (p) await createStarterSources(row.id, c);
+        return p || one('select * from public.profiles where id = $1', [row.id], c);
+      });
+    }
+
+    // Sliding renewal: the JWT lasts 7 days from the last day you used the app.
+    if (Date.now() / 1000 - payload.iat > RENEW_AFTER_S) issueSession(res, row, !!payload.rem);
+
+    req.auth = payload;
+    req.user = publicUser(row, profile);
+    req.profile = profile;
+    next();
+  } catch (err) {
+    next(err);
+  }
 }

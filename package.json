@@ -2,8 +2,11 @@
   "name": "spendsmart",
   "private": true,
   "version": "1.0.0",
-  "description": "SpendSmart — know where every coin goes. React + Node + Supabase.",
-  "workspaces": ["client", "server"],
+  "description": "SpendSmart — know where every coin goes. React + Node + PostgreSQL (hosted on Supabase).",
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
     "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w client",

@@ -34,7 +34,7 @@ export default function AddPurchase() {
 
   function pickFile(f) {
     if (!f) return;
-    if (!/^image\/(jpeg|png|webp|heic)$/.test(f.type)) { setErr('Receipts must be a JPG or PNG image.'); return; }
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { setErr('Receipts must be a JPG, PNG or WEBP image.'); return; }
     if (f.size > 8 * 1024 * 1024) { setErr('That photo is over 8 MB.'); return; }
     setErr(''); setFile(f);
   }
@@ -111,7 +111,7 @@ export default function AddPurchase() {
             onDrop={(e) => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files?.[0]); }}>
             <Icon d={I.camera}><circle cx="12" cy="13" r="3.5" /></Icon>
             {file ? <>Receipt attached <span className="dz-sub">{file.name} · click to change</span></>
-              : <>Add receipt photo <span className="dz-sub">Optional · drag a JPG or PNG here, or click to browse</span></>}
+              : <>Add receipt photo <span className="dz-sub">Optional · drag a JPG, PNG or WEBP (max 8 MB) here, or click to browse</span></>}
           </button>
         </div>
 

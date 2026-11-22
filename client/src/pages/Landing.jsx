@@ -10,7 +10,7 @@ const WORDS = ['Know', 'where', 'every', 'coin', 'goes.'];
 function Emv(props) { return <span className="emv" {...props} />; }
 
 export default function Landing() {
-  const { session } = useAuth();
+  const { user } = useAuth();
   const [seen, setSeen] = useState({});
   const [tilt, setTilt] = useState({ rx: 0, ry: 0 });
   const [bPhase, setBPhase] = useState(0);
@@ -52,8 +52,9 @@ export default function Landing() {
   }
 
   const cls = (k) => (seen[k] ? 'in' : '');
-  const startTo = session ? '/dashboard' : '/login?mode=signup';
-  const loginTo = session ? '/dashboard' : '/login';
+  // Main CTAs always go through the auth page; a signed-in user gets a separate "Open dashboard" link.
+  const startTo = '/login?mode=signup';
+  const loginTo = '/login';
   const bW = bPhase === 0 ? 0 : bPhase === 1 ? 60 : 85;
 
   return (
@@ -64,13 +65,10 @@ export default function Landing() {
           <nav aria-label="Sections" className="nav-links">
             <a className="lk" href="#money">Accounts</a><a className="lk" href="#budgets">Budgets</a><a className="lk" href="#split">Split</a><a className="lk" href="#renew">Renewals</a><a className="lk" href="#goals">Goals</a>
           </nav>
-          <div style={{ display: 'flex', gap: 10 }}>
-            {session
-              ? <Link className="btn" to="/dashboard" style={{ height: 44, padding: '0 20px', fontSize: 14 }}>Open dashboard</Link>
-              : <>
-                  <Link className="btn-o" to="/login" style={{ height: 44, padding: '0 18px', fontSize: 14 }}>Log in</Link>
-                  <Link className="btn" to="/login?mode=signup" style={{ height: 44, padding: '0 20px', fontSize: 14 }}>Get started</Link>
-                </>}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            {user && <Link className="lk" to="/dashboard" style={{ fontSize: 14, fontWeight: 600, marginRight: 4 }}>Open dashboard</Link>}
+            <Link className="btn-o" to={loginTo} style={{ height: 44, padding: '0 18px', fontSize: 14 }}>Log in</Link>
+            <Link className="btn" to={startTo} style={{ height: 44, padding: '0 20px', fontSize: 14 }}>Get started</Link>
           </div>
         </div>
       </header>

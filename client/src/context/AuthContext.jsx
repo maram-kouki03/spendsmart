@@ -1,23 +1,72 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase.js';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { api, setUnauthorizedHandler } from '../lib/api.js';
 
 const Ctx = createContext(null);
 
+/**
+ * The signed-in user comes from GET /api/auth/me (the session is an httpOnly cookie the
+ * browser sends automatically). `user` is null when logged out; `ready` turns true after the first check.
+ */
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
+  const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
-  const [recovery, setRecovery] = useState(false);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => { setSession(data.session); setReady(true); });
-    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
-      setSession(s);
-      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
-    });
-    return () => sub.subscription.unsubscribe();
+  const refresh = useCallback(async () => {
+    try {
+      const { user: u } = await api.get('/auth/me');
+      setUser(u);
+      return u;
+    } catch (e) {
+      // 401 = not signed in. Anything else (server down) also leaves us logged out, but we don't hang.
+      if (e.status !== 401) console.warn('Could not check the session:', e.message);
+      setUser(null);
+      return null;
+    } finally {
+      setReady(true);
+    }
   }, []);
 
-  const value = { session, user: session?.user ?? null, ready, recovery, setRecovery, signOut: () => supabase.auth.signOut() };
+  useEffect(() => {
+    refresh();
+    // Any API call that finds the session gone drops the user; AppLayout then redirects to /login.
+    setUnauthorizedHandler(() => setUser(null));
+    return () => setUnauthorizedHandler(null);
+  }, [refresh]);
+
+  const login = useCallback(async (email, password, remember) => {
+    const { user: u } = await api.post('/auth/login', { email, password, remember });
+    setUser(u);
+    return u;
+  }, []);
+
+  // Sign-up doesn't sign in: it returns { needsVerification, email, resendIn } and a code is emailed.
+  const register = useCallback(
+    (full_name, email, password, confirmPassword, remember) => api.post('/auth/register', { full_name, email, password, confirmPassword, remember }),
+    []
+  );
+
+  const verifyEmail = useCallback(async (email, code, remember) => {
+    const { user: u } = await api.post('/auth/verify-email', { email, code, remember });
+    setUser(u);
+    return u;
+  }, []);
+
+  const resendCode = useCallback((email) => api.post('/auth/resend-code', { email }), []);
+
+  const loginWithGoogle = useCallback(async (credential, remember) => {
+    const { user: u } = await api.post('/auth/google', { credential, remember });
+    setUser(u);
+    return u;
+  }, []);
+
+  const logout = useCallback(async () => {
+    try { await api.post('/auth/logout'); } finally { setUser(null); }
+  }, []);
+
+  const value = useMemo(
+    () => ({ user, ready, login, register, verifyEmail, resendCode, loginWithGoogle, logout, refresh, setUser }),
+    [user, ready, login, register, verifyEmail, resendCode, loginWithGoogle, logout, refresh]
+  );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

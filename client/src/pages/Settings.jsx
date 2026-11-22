@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { I } from '../lib/icons.js';
@@ -6,15 +6,17 @@ import { initials } from '../lib/format.js';
 import { useApp } from '../context/AppContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import Topbar from '../components/Topbar.jsx';
+import { checkPassword, newPasswordProblem } from '../lib/passwordRules.js';
 import { ErrorNote, Icon, Modal, Seg, Switch } from '../components/ui.jsx';
+import { MatchNote, PasswordChecklist } from '../components/PasswordChecklist.jsx';
 
 const NOTE = { TND: 'Amounts will show in Tunisian dinar (TND).', EUR: 'Amounts will show in euro (€).', USD: 'Amounts will show in US dollars ($).' };
 const TOGGLES = [['notify_budget', 'Budget alerts', 'When spending passes a budget’s alert threshold'], ['notify_split', 'Split requests', 'When someone asks you to share a cost'], ['notify_subs', 'Subscription reminders', '3 days before each renewal']];
 const BG = { g1: 'linear-gradient(135deg,#FDEEB2,#FBE38E 50%,#F2D06B)', g2: 'linear-gradient(135deg,#6B5A33,#3B2F12)', g3: 'linear-gradient(135deg,#FFFBEF,#FFF0B3)', g4: 'linear-gradient(135deg,#FFF0B3,#F2D06B)' };
 
 export default function Settings() {
-  const { profile, sources, refresh, toast } = useApp();
-  const { user, signOut } = useAuth();
+  const { profile, sources, summary, refresh, toast } = useApp();
+  const { user, logout: endSession } = useAuth();
   const nav = useNavigate();
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -36,7 +38,7 @@ export default function Settings() {
     } catch (e) { toast(e.message, 'err'); } finally { setExporting(false); }
   }
 
-  async function logout() { await signOut(); nav('/login', { replace: true }); }
+  async function logout() { await endSession(); nav('/login', { replace: true }); }
 
   const name = profile?.full_name || '';
   return (
@@ -56,7 +58,7 @@ export default function Settings() {
           <span className="small-muted">{NOTE[profile?.currency || 'TND']}</span>
         </section>
 
-        <SourcesSection sources={sources} onChange={refresh} />
+        <SourcesSection sources={sources} archived={summary?.archivedSources || []} onChange={refresh} />
 
         <section className="card sc">
           <h2 className="h2">Notifications</h2>
@@ -69,6 +71,8 @@ export default function Settings() {
             ))}
           </div>
         </section>
+
+        <PasswordSection />
 
         <section className="card sc" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ flex: '1 1 240px' }}><div style={{ fontWeight: 600 }}>Your data</div><div style={{ fontSize: 13, color: '#6B5A33' }}>Download every transaction, budget and goal as a CSV file.</div></div>
@@ -86,6 +90,54 @@ export default function Settings() {
   );
 }
 
+function PasswordSection() {
+  const { user, setUser } = useAuth();
+  const { toast } = useApp();
+  const hasPassword = !!user?.has_password;
+  const [cur, setCur] = useState('');
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const pwCheck = useMemo(() => checkPassword(pw, { email: user?.email, name: user?.full_name }), [pw, user?.email, user?.full_name]);
+  const ready = pwCheck.ok && pw === pw2 && (!hasPassword || !!cur);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    if (hasPassword && !cur) return setErr('Enter your current password.');
+    const bad = newPasswordProblem(pw, pw2, { email: user?.email, name: user?.full_name });
+    if (bad) return setErr(bad.message);
+    setBusy(true);
+    try {
+      const res = await api.post('/auth/change-password', { current_password: cur, new_password: pw, confirm_password: pw2 });
+      if (res?.user) setUser(res.user);
+      setCur(''); setPw(''); setPw2('');
+      toast(hasPassword ? 'Password changed — other devices were signed out' : 'Password set — you can now log in with your email too');
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  }
+
+  return (
+    <section className="card sc">
+      <h2 className="h2">{hasPassword ? 'Change password' : 'Set a password'}</h2>
+      {!hasPassword && <span className="small-muted">You signed up with Google. Add a password to also log in with your email.</span>}
+      <form onSubmit={submit} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+        {/* Hidden username field helps password managers save the right account. */}
+        <input type="email" autoComplete="username" value={user?.email || ''} readOnly hidden />
+        {hasPassword && <label className="src-field" style={{ flex: '1 1 200px' }}>Current password<input className="inp" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} style={{ height: 44 }} /></label>}
+        <label className="src-field" style={{ flex: '1 1 200px' }}>New password<input className="inp" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={pw} onChange={(e) => setPw(e.target.value)} style={{ height: 44 }} aria-describedby="set-pw-help" /></label>
+        <label className="src-field" style={{ flex: '1 1 200px' }}>Confirm new password<input className="inp" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={{ height: 44 }} aria-describedby="set-pw-match" /></label>
+        <button className="btn" disabled={busy} aria-disabled={!ready && !busy ? 'true' : undefined} style={{ height: 44, padding: '0 18px' }}>{busy ? <span className="spin" /> : <><Icon d={I.check} size={18} />{hasPassword ? 'Update password' : 'Set password'}</>}</button>
+      </form>
+      <div>
+        <MatchNote pw={pw} confirm={pw2} id="set-pw-match" />
+        <PasswordChecklist result={pwCheck} id="set-pw-help" />
+      </div>
+      <ErrorNote>{err}</ErrorNote>
+    </section>
+  );
+}
+
 function ProfileForm({ initial, onSave }) {
   const [n, setN] = useState(initial);
   return (
@@ -96,8 +148,8 @@ function ProfileForm({ initial, onSave }) {
   );
 }
 
-function SourcesSection({ sources, onChange }) {
-  const { toast } = useApp();
+function SourcesSection({ sources, archived, onChange }) {
+  const { toast, fmt } = useApp();
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState('');
   useEffect(() => { setRows(sources.map((s) => ({ ...s, _name: s.name, _start: String(s.starting_balance), _last4: s.last4 || '' }))); }, [sources]);
@@ -113,8 +165,20 @@ function SourcesSection({ sources, onChange }) {
     } catch (e) { setErr(e.message); }
   }
   async function del(r) {
-    if (!window.confirm(`Delete ${r.name}? Its transactions are deleted too.`)) return;
-    try { await api.del(`/sources/${r.id}`); toast(`${r.name} deleted`); onChange(); } catch (e) { setErr(e.message); }
+    setErr('');
+    if (!window.confirm(`Delete ${r.name}?`)) return;
+    try { await api.del(`/sources/${r.id}`); toast(`${r.name} deleted`); onChange(); }
+    catch (e) {
+      // A card with transactions is never deleted (that would erase history) — offer to archive it.
+      if (e.code !== 'source_has_history') return setErr(e.message);
+      const n = e.data?.count ?? 0;
+      if (!window.confirm(`This card has ${n} transaction${n === 1 ? '' : 's'}. Archive it instead? Its history stays.`)) return;
+      try { await api.del(`/sources/${r.id}?archive=true`); toast(`${r.name} archived`); onChange(); } catch (e2) { setErr(e2.message); }
+    }
+  }
+  async function restore(a) {
+    setErr('');
+    try { await api.post(`/sources/${a.id}/restore`); toast(`${a.name} restored`); onChange(); } catch (e) { setErr(e.message); }
   }
   async function add() {
     try { await api.post('/sources', { name: 'New wallet', kind: 'cash', starting_balance: 0 }); onChange(); } catch (e) { setErr(e.message); }
@@ -137,6 +201,19 @@ function SourcesSection({ sources, onChange }) {
           </form>
         ))}
       </div>
+      {archived.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <h3 style={{ margin: '6px 0 0', fontSize: 15, fontWeight: 600 }}>Archived cards</h3>
+          <span className="small-muted">Hidden from pickers and the dashboard. Their transactions stay in your history.</span>
+          {archived.map((a) => (
+            <div key={a.id} className="srow" style={{ alignItems: 'center' }}>
+              <span className="minicard" style={{ background: BG[a.style] || BG.g1, opacity: 0.5 }} />
+              <div style={{ flex: '1 1 180px' }}><div style={{ fontWeight: 600 }}>{a.name}</div><div className="small-muted">Balance {fmt(a.balance)}</div></div>
+              <button type="button" className="btn-o" style={{ height: 40 }} onClick={() => restore(a)} aria-label={`Restore ${a.name}`}>Restore</button>
+            </div>
+          ))}
+        </div>
+      )}
       <ErrorNote>{err}</ErrorNote>
     </section>
   );

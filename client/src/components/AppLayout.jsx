@@ -4,10 +4,10 @@ import { AppProvider } from '../context/AppContext.jsx';
 import Sidebar from './Sidebar.jsx';
 
 export default function AppLayout() {
-  const { session, ready } = useAuth();
+  const { user, ready } = useAuth();
   const loc = useLocation();
   if (!ready) return <div className="ss boot"><span className="spin" aria-label="Loading" /></div>;
-  if (!session) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search + loc.hash }} />;
   return (
     <AppProvider>
       <div className="ss ss-layout">

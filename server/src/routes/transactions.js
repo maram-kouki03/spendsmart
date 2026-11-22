@@ -1,12 +1,54 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import { db } from '../supabase.js';
-import { ah, must, parse, HttpError, round2 } from '../lib/util.js';
-import { CATEGORIES, getSource, checkBudgetAlerts } from '../lib/finance.js';
+import { many, one, query, tx } from '../db.js';
+import { ah, parse, HttpError, round2, uuidParam, zonedParts, zonedTime, localYmd } from '../lib/util.js';
+import { CATEGORIES, getActiveSource, checkBudgetAlerts } from '../lib/finance.js';
+import { RECEIPT_MAX_BYTES, detectReceiptType, saveReceipt, removeReceipt, receiptFile, receiptMime } from '../lib/receipts.js';
 
 const r = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+uuidParam(r, 'Transaction not found');
+
+const multerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: RECEIPT_MAX_BYTES, files: 1 } }).single('file');
+/** multer with readable 400s ("File too large" → the size limit in MB). */
+const upload = (req, res, next) => multerUpload(req, res, (err) => {
+  if (!err) return next();
+  if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(400, `Receipt photos can be at most ${RECEIPT_MAX_BYTES / 1024 / 1024} MB.`));
+  next(new HttpError(400, `Upload failed: ${err.message}`));
+});
+
+/** Escapes LIKE wildcards so a search term is matched literally. */
+const likeTerm = (s) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+
+const MIN_DATE = Date.UTC(2000, 0, 1);
+const DAY = 86400000;
+
+/**
+ * When a transaction happened. A plain date ('YYYY-MM-DD', a day in the user's time zone) gets
+ * the current local time of day, so ordering within a day stays natural; today means "now".
+ * Must be a real date, from 2000 on, and at most one day in the future.
+ */
+export function parseOccurredAt(value, tz, now = new Date()) {
+  if (value === undefined || value === null || value === '') return now;
+  const bad = (msg) => new HttpError(400, `occurred_at: ${msg}`);
+  let at;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (m) {
+    const [y, mo, d] = [+m[1], +m[2] - 1, +m[3]];
+    const check = new Date(Date.UTC(y, mo, d));
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo || check.getUTCDate() !== d) throw bad('Not a valid date');
+    if (value === localYmd(now, tz)) return now;
+    const p = zonedParts(now, tz);
+    at = zonedTime(y, mo, d, tz, p.h, p.min);
+  } else {
+    if (!z.string().datetime({ offset: true }).safeParse(value).success) throw bad('Use a date (YYYY-MM-DD) or an ISO date-time');
+    at = new Date(value);
+  }
+  if (isNaN(at)) throw bad('Not a valid date');
+  if (at.getTime() < MIN_DATE) throw bad('Dates before 2000 are not allowed');
+  if (at.getTime() > now.getTime() + DAY) throw bad('Dates more than one day in the future are not allowed');
+  return at;
+}
 
 r.get('/transactions', ah(async (req, res) => {
   const q = parse(z.object({
@@ -19,19 +61,33 @@ r.get('/transactions', ah(async (req, res) => {
     limit: z.coerce.number().int().min(1).max(1000).default(300)
   }), req.query);
 
-  let query = db.from('transactions').select('*, source:sources(id, name)').eq('user_id', req.user.id)
-    .order('occurred_at', { ascending: false }).limit(q.limit);
-  if (q.kind) query = query.eq('kind', q.kind);
-  if (q.source) query = query.eq('source_id', q.source);
-  if (q.category) query = query.eq('category', q.category);
-  if (q.from) query = query.gte('occurred_at', q.from);
-  if (q.to) query = query.lt('occurred_at', q.to);
-  if (q.q) {
-    const term = q.q.replace(/[%,()]/g, ' ').trim();
-    if (term) query = query.or(`name.ilike.%${term}%,note.ilike.%${term}%,category.ilike.%${term}%`);
+  const where = ['t.user_id = $1'];
+  const params = [req.user.id];
+  const add = (cond, value) => { params.push(value); where.push(cond.replace('?', `$${params.length}`)); };
+  if (q.kind) add('t.kind = ?', q.kind);
+  if (q.source) add('t.source_id = ?', q.source);
+  if (q.category) add('t.category = ?', q.category);
+  if (q.from) add('t.occurred_at >= ?', q.from);
+  if (q.to) add('t.occurred_at < ?', q.to);
+  const term = q.q?.trim();
+  if (term) {
+    params.push(likeTerm(term));
+    const n = `$${params.length}`;
+    where.push(`(t.name ilike ${n} or t.note ilike ${n} or t.category ilike ${n})`);
   }
-  const rows = must(await query);
-  res.json(rows.map((t) => ({ ...t, amount: Number(t.amount) })));
+  params.push(q.limit);
+
+  // Archived cards keep their history: the source name is still shown (with `archived`).
+  const rows = await many(
+    `select t.*, json_build_object('id', s.id, 'name', s.name, 'archived', s.archived_at is not null) as source
+       from public.transactions t
+       left join public.sources s on s.id = t.source_id
+      where ${where.join(' and ')}
+      order by t.occurred_at desc
+      limit $${params.length}`,
+    params
+  );
+  res.json(rows);
 }));
 
 const txSchema = z.object({
@@ -40,7 +96,7 @@ const txSchema = z.object({
   category: z.string().trim().max(40).optional(),
   amount: z.coerce.number().positive().max(1e8),
   source_id: z.string().uuid(),
-  occurred_at: z.string().optional(),
+  occurred_at: z.string().max(40).optional().nullable(),
   note: z.string().max(240).optional().nullable()
 });
 
@@ -48,57 +104,52 @@ r.post('/transactions', ah(async (req, res) => {
   const body = parse(txSchema, req.body);
   const category = body.kind === 'income' ? 'Income' : (body.category || 'More');
   if (body.kind === 'expense' && !CATEGORIES.includes(category)) throw new HttpError(400, 'Unknown category');
+  const occurred = parseOccurredAt(body.occurred_at, req.profile.timezone);
 
-  const before = await getSource(req.user.id, body.source_id);
-  if (!before) throw new HttpError(404, 'Card or wallet not found');
-
-  let occurred = new Date();
-  if (body.occurred_at) {
-    // A plain date (YYYY-MM-DD) keeps today's time so ordering within the day is natural.
-    const d = /^\d{4}-\d{2}-\d{2}$/.test(body.occurred_at)
-      ? new Date(`${body.occurred_at}T${new Date().toISOString().slice(11)}`)
-      : new Date(body.occurred_at);
-    if (!isNaN(d)) occurred = d;
-  }
-
+  const before = await getActiveSource(req.user.id, body.source_id);
   const amount = round2(body.amount);
-  const tx = must(await db.from('transactions').insert({
-    user_id: req.user.id, source_id: body.source_id, kind: body.kind, name: body.name, category,
-    amount, occurred_at: occurred.toISOString(), note: body.note || null
-  }).select().single());
-
-  const budgets = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount) : [];
+  const { transaction, budgets } = await tx(async (c) => {
+    const t = await one(
+      `insert into public.transactions (user_id, source_id, kind, name, category, amount, occurred_at, note)
+       values ($1, $2, $3, $4, $5, $6, $7, $8) returning *`,
+      [req.user.id, body.source_id, body.kind, body.name, category, amount, occurred.toISOString(), body.note || null], c
+    );
+    const b = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount, c) : [];
+    return { transaction: t, budgets: b };
+  });
   const after = round2(before.balance + (body.kind === 'income' ? amount : -amount));
-  res.status(201).json({ transaction: { ...tx, amount }, source: { id: before.id, name: before.name, style: before.style, last4: before.last4, before: before.balance, after }, budgets });
+  res.status(201).json({ transaction, source: { id: before.id, name: before.name, style: before.style, last4: before.last4, before: before.balance, after }, budgets });
 }));
 
 r.delete('/transactions/:id', ah(async (req, res) => {
-  const tx = must(await db.from('transactions').select('id, receipt_path').eq('id', req.params.id).eq('user_id', req.user.id).maybeSingle());
-  if (!tx) throw new HttpError(404, 'Transaction not found');
-  if (tx.receipt_path) await db.storage.from('receipts').remove([tx.receipt_path]);
-  must(await db.from('transactions').delete().eq('id', tx.id));
+  const t = await one('delete from public.transactions where id = $1 and user_id = $2 returning receipt_path', [req.params.id, req.user.id]);
+  if (!t) throw new HttpError(404, 'Transaction not found');
+  await removeReceipt(t.receipt_path);
   res.status(204).end();
 }));
 
-r.post('/transactions/:id/receipt', upload.single('file'), ah(async (req, res) => {
+r.post('/transactions/:id/receipt', upload, ah(async (req, res) => {
   if (!req.file) throw new HttpError(400, 'No file uploaded');
-  if (!/^image\/(jpeg|png|webp|heic)$/.test(req.file.mimetype)) throw new HttpError(400, 'Use a JPG or PNG image');
-  const tx = must(await db.from('transactions').select('id').eq('id', req.params.id).eq('user_id', req.user.id).maybeSingle());
-  if (!tx) throw new HttpError(404, 'Transaction not found');
-  const ext = req.file.mimetype.split('/')[1].replace('jpeg', 'jpg');
-  const path = `${req.user.id}/${tx.id}.${ext}`;
-  const { error } = await db.storage.from('receipts').upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
-  if (error) throw new HttpError(400, error.message);
-  must(await db.from('transactions').update({ receipt_path: path }).eq('id', tx.id));
-  res.json({ receipt_path: path });
+  const t = await one('select id from public.transactions where id = $1 and user_id = $2', [req.params.id, req.user.id]);
+  if (!t) throw new HttpError(404, 'Transaction not found');
+  // The browser's Content-Type is not trusted: the type comes from the file's own bytes.
+  const mime = await detectReceiptType(req.file.buffer);
+  if (!mime) throw new HttpError(400, 'Use a JPG, PNG or WEBP image.');
+  const receipt_path = await saveReceipt(req.user.id, t.id, mime, req.file.buffer);
+  await query('update public.transactions set receipt_path = $1 where id = $2', [receipt_path, t.id]);
+  res.json({ receipt_path });
 }));
 
+/** Streams the receipt image to its owner. */
 r.get('/transactions/:id/receipt', ah(async (req, res) => {
-  const tx = must(await db.from('transactions').select('receipt_path').eq('id', req.params.id).eq('user_id', req.user.id).maybeSingle());
-  if (!tx?.receipt_path) throw new HttpError(404, 'No receipt');
-  const { data, error } = await db.storage.from('receipts').createSignedUrl(tx.receipt_path, 300);
-  if (error) throw new HttpError(400, error.message);
-  res.json({ url: data.signedUrl });
+  const t = await one('select receipt_path from public.transactions where id = $1 and user_id = $2', [req.params.id, req.user.id]);
+  if (!t) throw new HttpError(404, 'Transaction not found');
+  if (!t.receipt_path) throw new HttpError(404, 'No receipt');
+  res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+  res.type(receiptMime(t.receipt_path));
+  res.sendFile(receiptFile(t.receipt_path), (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Receipt file is missing' });
+  });
 }));
 
 export default r;

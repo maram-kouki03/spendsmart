@@ -1,0 +1,241 @@
+### SpendSmart — auth requests for the VS Code "REST Client" extension (humao.rest-client).
+### Click "Send Request" above each block. Cookies are kept between requests, so after
+### verify-email / login the `me` request is signed in.
+###
+### Sign-up flow: register only writes to public.pending_signups. The account (users + profiles +
+### 3 sources) is created by verify-email. To get the code without sending real email, start the
+### server with SMTP off — in PowerShell (a single space; '' would just unset it):
+###   $env:SMTP_HOST=' '; npm run dev -w server        (undo later: Remove-Item Env:SMTP_HOST)
+### and copy it from the console:   [DEV] Verification code for you@example.com: 123456
+### Then paste it into @code below.
+###
+### Check the database in Supabase → SQL editor:
+###   select email, attempts, last_sent_at, code_expires_at from pending_signups;
+###   select email, email_verified_at, created_at from users order by created_at desc;
+
+@baseUrl = http://localhost:4000
+@email = test.user@example.com
+@password = Correct-Horse-42
+@code = 000000
+
+### Password rules (client/src/lib/passwordRules.js = server/src/lib/passwordRules.js), checked on
+### register, reset-password and change-password (never on login): 8–72 characters, an uppercase
+### and a lowercase letter, a number, a symbol, no spaces at the start/end, not containing the
+### email name or first name, not a common password. The confirmation must match.
+###   400 { error: "<first problem>", code: "weak_password" }  |  400 { code: "password_mismatch" }
+
+### 0a. Register with a WEAK password — 400 { error: "Add an uppercase letter (A–Z) to your password.", code: "weak_password" }
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Test User",
+  "email": "{{email}}",
+  "password": "correct-horse-42",
+  "confirmPassword": "correct-horse-42"
+}
+
+### 0b. Register with a COMMON password — 400 { error: "That password is too common — …", code: "weak_password" }
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Test User",
+  "email": "{{email}}",
+  "password": "Password123!",
+  "confirmPassword": "Password123!"
+}
+
+### 0c. Register with the email name in the password — 400 { error: "Don't use your name or email…", code: "weak_password" }
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Test User",
+  "email": "{{email}}",
+  "password": "Test.User#2026",
+  "confirmPassword": "Test.User#2026"
+}
+
+### 0d. Register with a MISMATCHED confirmation — 400 { error: "Passwords don't match.", code: "password_mismatch" }
+###     (confirmPassword missing → 400 { error: "Confirm your password.", code: "password_mismatch" })
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Test User",
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "confirmPassword": "Correct-Horse-43"
+}
+
+### 1. Register (VALID: strong password + matching confirmation) — 201 { needsVerification: true, email, resendIn }; row in pending_signups, nothing in users
+###    Again within 60 s → 429 { code: "resend_too_soon", secondsLeft }
+###    SMTP failing → 502 { code: "email_send_failed" } and nothing is stored
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Test User",
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "confirmPassword": "{{password}}"
+}
+
+### 2. Login BEFORE confirming — 403 { code: "email_not_verified", email, resendIn }
+###    (also sends a fresh code if the last one is older than 60 s)
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+### 3. Login BEFORE confirming with a wrong password — 401 { code: "invalid_credentials" }
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "definitely-wrong"
+}
+
+### 4. Resend code — 200 generic message, new code, attempts reset to 0;
+###    429 { code: "resend_too_soon", secondsLeft } within 60 s of the last code
+POST {{baseUrl}}/api/auth/resend-code
+Content-Type: application/json
+
+{
+  "email": "{{email}}"
+}
+
+### 5. Resend code for an unknown email — same generic answer (no account enumeration)
+POST {{baseUrl}}/api/auth/resend-code
+Content-Type: application/json
+
+{
+  "email": "nobody-{{$randomInt 1000 9999}}@example.com"
+}
+
+### 6. Verify with a WRONG code — 400 { code: "invalid_code", attemptsLeft }
+###    After 5 wrong tries: { code: "too_many_attempts" } until a new code is requested (4.)
+POST {{baseUrl}}/api/auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "code": "999999"
+}
+
+### 7. Verify with the code from the console/email — 200 { user }, sets the ss_session cookie.
+###    The pending row is gone; users, profiles and 3 sources now exist.
+POST {{baseUrl}}/api/auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "code": "{{code}}",
+  "remember": true
+}
+
+### 8. Verify again (double click) — 409 { code: "already_verified" }
+POST {{baseUrl}}/api/auth/verify-email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "code": "{{code}}"
+}
+
+### 9. Me — 200 { user } when signed in, 401 otherwise
+GET {{baseUrl}}/api/auth/me
+
+### 10. Logout — clears the cookie
+POST {{baseUrl}}/api/auth/logout
+
+### 11. Me after logout — 401
+GET {{baseUrl}}/api/auth/me
+
+### 12. Login with a WRONG password — 401 { code: "invalid_credentials" }
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "definitely-wrong"
+}
+
+### 13. Login (confirmed account) — 200 { user } and sets the cookie
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}",
+  "remember": true
+}
+
+### 14. Register again with the confirmed email — 409 { code: "email_taken" }
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Someone Else",
+  "email": "{{email}}",
+  "password": "Another-Passw0rd!",
+  "confirmPassword": "Another-Passw0rd!"
+}
+
+### 15. Validation error — 400 { error: "That email address doesn't look right.", code: "validation_error" }
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{
+  "full_name": "Bad Email",
+  "email": "not-an-email",
+  "password": "short"
+}
+
+### 16. Change password (signed in, e.g. after 13.) — weak new password → 400 weak_password
+POST {{baseUrl}}/api/auth/change-password
+Content-Type: application/json
+
+{
+  "current_password": "{{password}}",
+  "new_password": "abcdefgh",
+  "confirm_password": "abcdefgh"
+}
+
+### 17. Change password — mismatch → 400 password_mismatch
+POST {{baseUrl}}/api/auth/change-password
+Content-Type: application/json
+
+{
+  "current_password": "{{password}}",
+  "new_password": "Brand-New-Pass-77",
+  "confirm_password": "Brand-New-Pass-78"
+}
+
+### 18. Change password — valid → 200 { ok: true, user }; other sessions are signed out.
+###     A Google-only account sends the same request without current_password ("Set a password").
+POST {{baseUrl}}/api/auth/change-password
+Content-Type: application/json
+
+{
+  "current_password": "{{password}}",
+  "new_password": "Brand-New-Pass-77",
+  "confirm_password": "Brand-New-Pass-77"
+}
+
+### 19. Reset password from the emailed link (paste the token from the link / console) —
+###     same rules: weak → 400 weak_password, mismatch → 400 password_mismatch, valid → 200 { user }
+###     (a rejected password doesn't use up the link)
+POST {{baseUrl}}/api/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "PASTE-TOKEN-HERE",
+  "password": "Fresh-Start-2026!",
+  "confirmPassword": "Fresh-Start-2026!"
+}

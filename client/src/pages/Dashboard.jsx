@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { I, SUB_COLOR, SUB_ICON } from '../lib/icons.js';
@@ -6,21 +6,58 @@ import { firstName, relDay, renewText, shortDate } from '../lib/format.js';
 import { useApp } from '../context/AppContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import Topbar from '../components/Topbar.jsx';
-import SourceCard from '../components/SourceCard.jsx';
-import { Coin, ErrorNote, Icon, Num } from '../components/ui.jsx';
+import Insights from '../components/Insights.jsx';
+import { BankCard, Coin, ErrorNote, Icon, Num } from '../components/ui.jsx';
+
+/** One card or wallet: name, big balance, and its last movement just underneath. */
+function MoneyCard({ src, fmt }) {
+  const dark = src.style === 'g2';
+  const last = src.last;
+  const income = last?.kind === 'income';
+  const amtColor = income ? (dark ? '#86EFAC' : '#15803D') : (dark ? '#FCA5A5' : '#B91C1C');
+  return (
+    <Link className="src-tile" to={`/transactions?source=${src.id}`} aria-label={`${src.name} — view transactions`}>
+      <BankCard source={src}>
+        <div className="money-top">
+          {src.kind === 'cash' ? <Icon d={I.wallet} style={{ color: dark ? '#FFF0B3' : '#8A6406' }}><circle cx="16" cy="14" r="1.3" /></Icon> : <span className="emv" />}
+          <span className="money-name">{src.name}</span>
+        </div>
+        <div>
+          <div className="money-bal"><Num value={src.balance} /></div>
+          <div className={`money-last${dark ? ' dark' : ''}`}>
+            {last ? (
+              <>
+                <b className="num" style={{ color: amtColor }}>{fmt(last.amount, { sign: income ? '+' : '−' })}</b>
+                <span className="money-meta"> · {last.name} · {relDay(last.occurred_at)}</span>
+              </>
+            ) : <span className="money-meta">No activity yet</span>}
+          </div>
+        </div>
+      </BankCard>
+    </Link>
+  );
+}
 
 export default function Dashboard() {
   const { summary, error, refresh, fmt, toast } = useApp();
   const { user } = useAuth();
   const [seeding, setSeeding] = useState(false);
-  const name = firstName(summary?.profile?.full_name || user?.user_metadata?.full_name || '', user?.email);
+  const [analytics, setAnalytics] = useState(null);
+  const [chartErr, setChartErr] = useState('');
+  const name = firstName(summary?.profile?.full_name || user?.full_name || '', user?.email);
 
   const s = summary;
   const noActivity = s && s.sources.every((x) => !x.last);
-  const monthStart = s ? new Date(s.monthStart) : new Date();
-  const range = `${monthStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date().getDate()}`;
-  const srcNames = s?.sources.map((x) => x.name) || [];
-  const across = srcNames.length > 1 ? `${srcNames.slice(0, -1).join(', ')} and ${srcNames.at(-1)}` : srcNames[0] || 'your sources';
+
+  // Re-pull chart data whenever the summary refreshes (new purchase, seed, etc.).
+  useEffect(() => {
+    if (!summary) return undefined;
+    let live = true;
+    api.get('/analytics')
+      .then((d) => { if (live) { setAnalytics(d); setChartErr(''); } })
+      .catch((e) => { if (live) setChartErr(e.message); });
+    return () => { live = false; };
+  }, [summary]);
 
   async function seed() {
     setSeeding(true);
@@ -47,38 +84,15 @@ export default function Dashboard() {
       )}
 
       <div className="stg col" style={{ gap: 24 }}>
-        <div className="row-wrap">
-          <div className="gold sheen hero3d total-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: 14, fontWeight: 600 }}>Total available</span><Coin size={34} spin style={{ fontSize: 14 }} /></div>
-            <span className="total-n">{s ? <Num value={s.totals.available} duration={1300} /> : <span className="skel" style={{ display: 'block', height: 54, width: 260 }} />}</span>
-            <span style={{ fontSize: 13, color: '#57400A' }}>across {across}</span>
-          </div>
-          <div className="card sum">
-            <span className="sum-l"><span className="sum-ic" style={{ background: '#FEE2E2', color: '#DC2626' }}><Icon d={I.down} size={16} /></span>Spent this month</span>
-            <span style={{ fontSize: 30, fontWeight: 700 }}>{s ? <Num value={s.totals.spent} /> : '—'}</span>
-            <span style={{ fontSize: 12, color: '#6B5A33' }}>{range}</span>
-          </div>
-          <div className="card sum">
-            <span className="sum-l"><span className="sum-ic" style={{ background: '#DCFCE7', color: '#15803D' }}><Icon d={I.up} size={16} /></span>Income this month</span>
-            <span style={{ fontSize: 30, fontWeight: 700, color: '#15803D' }}>{s ? <Num value={s.totals.income} /> : '—'}</span>
-            <span style={{ fontSize: 12, color: '#6B5A33' }}>{s?.totals.incomeFrom.length ? s.totals.incomeFrom.join(', ') : 'Nothing yet this month'}</span>
-          </div>
-        </div>
-
         <h2 className="h2">My money</h2>
         <div className="row-wrap" style={{ gap: 18, marginTop: -10 }}>
-          {s?.sources.map((src) => (
-            <Link key={src.id} className="src-tile" to={`/transactions?source=${src.id}`}>
-              <SourceCard source={src} />
-              <div className="last">
-                {src.last
-                  ? <><span>{src.last.name} · {relDay(src.last.occurred_at)}</span><span style={{ color: src.last.kind === 'income' ? '#15803D' : '#DC2626', fontWeight: 600 }}>{src.last.kind === 'income' ? '+' : '−'}{fmt(src.last.amount)}</span></>
-                  : <span>No activity yet</span>}
-              </div>
-            </Link>
-          ))}
+          {s?.sources.map((src) => <MoneyCard key={src.id} src={src} fmt={fmt} />)}
           {!s && [1, 2, 3].map((k) => <div key={k} className="src-tile"><span className="skel" style={{ height: 178, borderRadius: 22 }} /></div>)}
         </div>
+
+        <h2 className="h2">Insights</h2>
+        {chartErr && <ErrorNote>{chartErr}</ErrorNote>}
+        <div style={{ marginTop: -10 }}><Insights data={analytics} /></div>
 
         <div className="card" style={{ padding: 22, display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><h2 className="h2">Upcoming</h2><span className="small-muted">Next 7 days</span></div>

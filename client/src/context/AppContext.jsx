@@ -18,6 +18,19 @@ export function AppProvider({ children }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Tell the server this browser's time zone (once per session, only when it differs), so
+  // "this month", "today" and renewal dates follow the user's local calendar.
+  const tzSent = useRef(false);
+  useEffect(() => {
+    const stored = summary?.profile?.timezone;
+    if (!stored || tzSent.current) return;
+    let tz = '';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* very old browser */ }
+    if (!tz || tz === stored) return;
+    tzSent.current = true;
+    api.patch('/me', { timezone: tz }).then(refresh).catch(() => { /* unknown zone: keep the stored one */ });
+  }, [summary, refresh]);
+
   const toast = useCallback((text, kind = 'ok') => {
     const id = ++seq.current;
     setToasts((t) => [...t, { id, text, kind }]);

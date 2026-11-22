@@ -4,3 +4,5 @@ dist
 .env.local
 *.log
 .DS_Store
+# Receipt photos uploaded by users (served by the API)
+server/uploads/

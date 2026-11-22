@@ -12,13 +12,38 @@ const SPLITS = [{ value: 50, label: '50 / 50' }, { value: 60, label: '60 / 40' }
 export default function Shared() {
   const { fmt, fmtShort, sources, refresh, toast } = useApp();
   const { data, loading, error, reload } = useApi('/shared');
+  const invites = useApi('/invites');
   const [sel, setSel] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [inviteTo, setInviteTo] = useState(null); // a group to invite more people to
   const [newBudget, setNewBudget] = useState(false);
+  const [confirm, setConfirm] = useState(null); // { title, text, action, run }
 
   const entries = data ? [...data.people, ...data.groups] : [];
   const cur = entries.find((e) => `${e.kind}:${e.id}` === sel) || entries[0];
-  const after = () => { reload(); refresh(); };
+  const after = () => { reload(); invites.reload(); refresh(); };
+  // An invitation or request answered from the notification bell.
+  useEffect(() => {
+    const on = () => { reload(); invites.reload(); };
+    window.addEventListener('spendsmart:shared-changed', on);
+    return () => window.removeEventListener('spendsmart:shared-changed', on);
+  }, [reload, invites.reload]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ask = (title, text, action, fn, okMsg) => setConfirm({ title, text, action, run: async () => {
+    try { await fn(); toast(okMsg); setConfirm(null); setSel(null); after(); } catch (e) { toast(e.message, 'err'); }
+  } });
+  const removeContact = (p) => ask(`Remove ${p.name}?`,
+    `You'll stop seeing each other in Shared expenses, pending requests between you are cancelled and your shared budgets are hidden. Past splits stay in your history.`,
+    'Remove', () => api.del(`/contacts/${p.id}`), `${p.name.split(' ')[0]} removed`);
+  const leaveGroup = (g) => ask(`Leave ${g.name}?`,
+    `Your pending requests in this group are cancelled and the group stops seeing your shared-budget spending.${g.owner ? ' Ownership passes to the next member.' : ''}`,
+    'Leave group', () => api.post(`/groups/${g.id}/leave`), `You left ${g.name}`);
+  const removeMember = (g, m) => ask(`Remove ${m.name} from ${g.name}?`, 'Their pending requests in this group are cancelled.',
+    'Remove', () => api.del(`/groups/${g.id}/members/${m.user_id}`), `${m.name.split(' ')[0]} removed`);
+  async function cancelGroupInvite(g, x) {
+    try { await api.del(`/groups/${g.id}/invites?email=${encodeURIComponent(x.email)}`); toast('Invitation cancelled'); reload(); }
+    catch (e) { toast(e.message, 'err'); }
+  }
 
   async function settle() {
     const src = sources[0];
@@ -40,8 +65,10 @@ export default function Shared() {
     else balance = `You and ${cur.name} are settled up`;
   } else if (cur?.kind === 'group') {
     const others = cur.members.filter((m) => m.name !== 'You').map((m) => m.name.split(' ')[0]);
-    role = `Group · ${others.length > 1 ? `${others.slice(0, -1).join(', ')} and ${others.at(-1)}` : others[0] || 'just you'}${others.length ? ' and you' : ''}`;
-    balance = cur.pending ? `${cur.pending.title} pending — ${fmtShort(cur.pending.share)} each` : 'Nothing shared yet';
+    role = `Group · ${others.length > 1 ? `${others.slice(0, -1).join(', ')} and ${others.at(-1)}` : others[0] || 'just you'}${others.length ? ' and you' : ''}`
+      + (cur.invited.length ? ` · ${cur.invited.length} invited` : '');
+    balance = cur.pending ? `${cur.pending.title} pending — ${fmtShort(cur.pending.share)} each`
+      : others.length ? 'Nothing shared yet' : 'Waiting for people to accept';
   }
 
   return (
@@ -68,8 +95,8 @@ export default function Shared() {
                 </button>
               );
             })}
-            <button className="person" aria-label="Add a person or group" onClick={() => setAdding(true)}>
-              <span className="av" style={{ background: 'transparent', border: '2px dashed #F2D06B', boxShadow: 'none', color: '#8A6406' }}><Icon d={I.plus} /></span>Add
+            <button className="person" aria-label="Invite a person or group" onClick={() => setAdding(true)}>
+              <span className="av" style={{ background: 'transparent', border: '2px dashed #F2D06B', boxShadow: 'none', color: '#8A6406' }}><Icon d={I.plus} /></span>Invite
             </button>
           </div>
 
@@ -77,8 +104,8 @@ export default function Shared() {
           {data && !cur && (
             <div className="card empty-card">
               <b style={{ color: '#3B2F12' }}>Share your first bill</b>
-              Add a roommate, partner or friend by the email they use on SpendSmart — or start a group for the apartment.
-              <button className="btn" onClick={() => setAdding(true)}><Icon d={I.plus} />Add a person or group</button>
+              Invite a roommate, partner or friend by email — or start a group for the apartment. Once they accept, you can split costs and share budgets.
+              <button className="btn" onClick={() => setAdding(true)}><Icon d={I.plus} />Invite a person or group</button>
             </div>
           )}
 
@@ -91,6 +118,31 @@ export default function Shared() {
                 </div>
                 {cur.kind === 'person' && cur.iOwe > 0 && <button className="settle-btn" onClick={settle}>Settle up</button>}
               </div>
+
+              {cur.kind === 'group' ? (
+                <div className="card member-list">
+                  {cur.members.map((m) => (
+                    <span key={m.user_id} className="member-chip">
+                      {m.name}{m.owner && <span className="small-muted"> · owner</span>}
+                      {cur.owner && m.name !== 'You' && <button className="chip-x" aria-label={`Remove ${m.name}`} onClick={() => removeMember(cur, m)}>×</button>}
+                    </span>
+                  ))}
+                  {cur.invited.map((x) => (
+                    <span key={x.email} className="member-chip invited">
+                      {x.email} <span className="st pend">Invited</span>
+                      {x.canCancel && <button className="chip-x" aria-label={`Cancel the invitation to ${x.email}`} onClick={() => cancelGroupInvite(cur, x)}>×</button>}
+                    </span>
+                  ))}
+                  <span className="member-actions">
+                    {cur.owner && <button className="link-btn" onClick={() => setInviteTo(cur)}>+ Invite</button>}
+                    <button className="link-btn danger-link" onClick={() => leaveGroup(cur)}>Leave group</button>
+                  </span>
+                </div>
+              ) : (
+                <div className="member-actions" style={{ marginTop: -10 }}>
+                  <button className="link-btn danger-link" onClick={() => removeContact(cur)}>Remove {cur.name.split(' ')[0]}</button>
+                </div>
+              )}
 
               <div className="row-wrap" style={{ gap: 18, alignItems: 'flex-start' }}>
                 <SplitForm key={`${cur.kind}:${cur.id}`} target={cur} onSent={after} />
@@ -109,6 +161,7 @@ export default function Shared() {
         </div>
 
         <div className="split-aside" style={{ gap: 10 }}>
+          <PendingInvites data={invites.data} onDone={after} />
           <span className="req-head"><span className="req-pill">For you</span>Requests waiting on you</span>
           {data && data.incoming.length === 0 && <div className="card" style={{ padding: 18, fontSize: 13, color: '#6B5A33' }}>No split requests right now. When someone shares a cost with you, it shows up here.</div>}
           {data?.incoming.map((r, k) => <IncomingRequest key={r.id} r={r} delay={k * 0.08} onDone={after} />)}
@@ -119,7 +172,7 @@ export default function Shared() {
                 {data.outgoing.slice(0, 6).map((r) => (
                   <div key={r.id} className="tx-row" style={{ padding: '12px 16px', gap: 10 }}>
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 14 }}>{r.title} · {r.to.name.split(' ')[0]}</div><div style={{ fontSize: 12, color: '#6B5A33' }}>their share {fmt(r.share)} · {timeAgo(r.created_at)}</div></div>
-                    <span className={`st ${r.status === 'accepted' ? 'ok' : r.status === 'declined' ? 'no' : 'pend'}`}>{r.status[0].toUpperCase() + r.status.slice(1)}</span>
+                    <span className={`st ${r.status === 'accepted' ? 'ok' : r.status === 'declined' || r.status === 'cancelled' ? 'no' : 'pend'}`}>{r.status[0].toUpperCase() + r.status.slice(1)}</span>
                   </div>
                 ))}
               </div>
@@ -128,8 +181,67 @@ export default function Shared() {
         </div>
       </div>
 
-      <AddPeopleModal open={adding} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); reload(); }} />
+      <AddPeopleModal open={adding} onClose={() => setAdding(false)} onAdded={() => { setAdding(false); after(); }} />
+      <AddPeopleModal open={!!inviteTo} group={inviteTo} onClose={() => setInviteTo(null)} onAdded={() => { setInviteTo(null); reload(); }} />
       <SharedBudgetModal open={newBudget} target={cur} onClose={() => setNewBudget(false)} onSaved={() => { setNewBudget(false); reload(); }} />
+      <Modal open={!!confirm} onClose={() => setConfirm(null)} title={confirm?.title || ''}>
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: '#57400A' }}>{confirm?.text}</p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn-o" style={{ flex: 1, height: 46 }} onClick={() => setConfirm(null)}>Keep</button>
+          <button className="btn" style={{ flex: 1, height: 46 }} onClick={() => confirm?.run()}>{confirm?.action}</button>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+/** Invitations waiting on me (Accept / Decline) and the ones I sent (Cancel). */
+function PendingInvites({ data, onDone }) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(null);
+  if (!data || (!data.incoming.length && !data.outgoing.length)) return null;
+  async function act(key, fn, msg) {
+    setBusy(key);
+    try { await fn(); toast(msg); onDone(); } catch (e) { toast(e.message, 'err'); } finally { setBusy(null); }
+  }
+  const answer = (i, ok) => act(`${i.kind}:${i.id}`,
+    () => api.post(i.kind === 'group' ? `/groups/${i.id}/${ok ? 'accept' : 'decline'}` : `/invites/${i.id}/${ok ? 'accept' : 'decline'}`),
+    ok ? (i.kind === 'group' ? `You joined ${i.group.name}` : `You and ${i.from.name.split(' ')[0]} are connected`) : 'Invitation declined');
+
+  return (
+    <>
+      <span className="req-head"><span className="req-pill">Invites</span>Pending invitations</span>
+      <div className="card" style={{ overflow: 'hidden' }}>
+        {data.incoming.map((i) => {
+          const [bg, fg] = avatarFor(i.from.email || i.id);
+          return (
+            <div key={`${i.kind}:${i.id}`} className="tx-row invite-row">
+              <Avatar initials={i.from.initials} bg={bg} fg={fg} size={38} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>
+                  {i.kind === 'group' ? <>{i.from.name} invited you to <b>{i.group.name}</b></> : <>{i.from.name} wants to share expenses</>}
+                </div>
+                <div style={{ fontSize: 12, color: '#6B5A33', overflowWrap: 'anywhere' }}>
+                  {i.kind === 'group' ? `${i.group.members} member${i.group.members === 1 ? '' : 's'}` : i.from.email} · {timeAgo(i.created_at)}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                  <button className="btn sm" disabled={busy === `${i.kind}:${i.id}`} onClick={() => answer(i, true)}>Accept</button>
+                  <button className="btn-o sm" disabled={busy === `${i.kind}:${i.id}`} onClick={() => answer(i, false)}>Decline</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {data.outgoing.map((i) => (
+          <div key={i.id} className="tx-row invite-row">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 14, overflowWrap: 'anywhere' }}>{i.email}</div>
+              <div style={{ fontSize: 12, color: '#6B5A33' }}>Sent · {i.relation} · {timeAgo(i.created_at)}</div>
+            </div>
+            <button className="btn-o sm" disabled={busy === i.id} onClick={() => act(i.id, () => api.del(`/invites/${i.id}`), 'Invitation cancelled')}>Cancel</button>
+          </div>
+        ))}
+      </div>
     </>
   );
 }
@@ -269,6 +381,14 @@ function SharedBudget({ b, onChange }) {
       <span style={{ fontWeight: 600, fontSize: 14 }}>{b.name} <span style={{ fontWeight: 400, color: '#6B5A33', fontSize: 12 }}>· {b.category}</span></span>
       <div className="row-wrap" style={{ gap: 10 }}>
         {b.rows.map((row) => {
+          if (row.waiting) {
+            return (
+              <div key={row.user_id} className="card mt waiting">
+                <div style={{ fontSize: 12.5, fontWeight: 600 }}>{row.name.split(' ')[0]}</div>
+                <span style={{ fontSize: 12.5, color: '#6B5A33' }}>Waiting for {row.name.split(' ')[0]} to join — their spending shows once they set their own limit.</span>
+              </div>
+            );
+          }
           const p = row.limit ? Math.round((row.spent / row.limit) * 100) : 0;
           return (
             <div key={row.user_id} className="card mt">
@@ -293,9 +413,10 @@ function SharedBudget({ b, onChange }) {
   );
 }
 
-function AddPeopleModal({ open, onClose, onAdded }) {
+function AddPeopleModal({ open, onClose, onAdded, group = null }) {
   const { toast } = useApp();
-  const [tab, setTab] = useState('person');
+  const [pick, setTab] = useState('person');
+  const tab = group ? 'group' : pick; // inviting more people to an existing group
   const [email, setEmail] = useState('');
   const [relation, setRelation] = useState('Roommate');
   const [gname, setGname] = useState('');
@@ -306,34 +427,36 @@ function AddPeopleModal({ open, onClose, onAdded }) {
   async function submit(e) {
     e.preventDefault(); setErr(''); setBusy(true);
     try {
-      if (tab === 'person') await api.post('/contacts', { email: email.trim(), relation });
-      else await api.post('/groups', { name: gname.trim(), emails: emails.split(/[\s,;]+/).filter(Boolean) });
-      toast(tab === 'person' ? 'Added!' : 'Group created');
+      const list = emails.split(/[\s,;]+/).filter(Boolean);
+      const r = tab === 'person' ? await api.post('/contacts', { email: email.trim(), relation })
+        : group ? await api.post(`/groups/${group.id}/invite`, { emails: list })
+          : await api.post('/groups', { name: gname.trim(), emails: list });
+      toast(r?.message || 'Invitation sent');
       setEmail(''); setGname(''); setEmails('');
       onAdded();
     } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Add a person or group">
-      <Seg label="Type" value={tab} onChange={setTab} options={[{ value: 'person', label: 'Person' }, { value: 'group', label: 'Group' }]} />
+    <Modal open={open} onClose={onClose} title={group ? `Invite people to ${group.name}` : 'Invite a person or group'}>
+      {!group && <Seg label="Type" value={tab} onChange={setTab} options={[{ value: 'person', label: 'Person' }, { value: 'group', label: 'Group' }]} />}
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {tab === 'person' ? (
           <>
-            <div><label className="lbl" htmlFor="pe">Their SpendSmart email</label><input className="inp" id="pe" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="friend@email.com" /></div>
+            <div><label className="lbl" htmlFor="pe">Their email</label><input className="inp" id="pe" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="friend@email.com" /></div>
             <div><label className="lbl" htmlFor="pr">They are your…</label>
               <select className="inp" id="pr" value={relation} onChange={(e) => setRelation(e.target.value)}>{['Roommate', 'Partner', 'Friend', 'Family', 'Colleague'].map((r) => <option key={r}>{r}</option>)}</select>
             </div>
           </>
         ) : (
           <>
-            <div><label className="lbl" htmlFor="gn">Group name</label><input className="inp" id="gn" required value={gname} onChange={(e) => setGname(e.target.value)} placeholder="Apartment 4B" /></div>
-            <div><label className="lbl" htmlFor="ge">Members' emails</label><textarea className="inp" id="ge" required rows={3} style={{ height: 'auto', padding: 12 }} value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="sarah@email.com, lina@email.com" /></div>
+            {!group && <div><label className="lbl" htmlFor="gn">Group name</label><input className="inp" id="gn" required value={gname} onChange={(e) => setGname(e.target.value)} placeholder="Apartment 4B" /></div>}
+            <div><label className="lbl" htmlFor="ge">{group ? 'Emails' : "Members' emails"}</label><textarea className="inp" id="ge" required rows={3} style={{ height: 'auto', padding: 12 }} value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="sarah@email.com, lina@email.com" /></div>
           </>
         )}
-        <span className="small-muted" style={{ fontSize: 12.5 }}>They need a SpendSmart account with that email.</span>
+        <span className="small-muted" style={{ fontSize: 12.5 }}>They'll get an invitation and have to accept it before you can split costs or see each other's shared budgets. Up to 20 invitations a day.</span>
         <ErrorNote>{err}</ErrorNote>
-        <button className="btn full" disabled={busy}>{busy ? <span className="spin" /> : tab === 'person' ? 'Add person' : 'Create group'}</button>
+        <button className="btn full" disabled={busy}>{busy ? <span className="spin" /> : tab === 'person' ? 'Send invitation' : group ? 'Send invitations' : 'Create group & invite'}</button>
       </form>
     </Modal>
   );
@@ -360,7 +483,7 @@ function SharedBudgetModal({ open, target, onClose, onSaved }) {
         <div><label className="lbl" htmlFor="sbn">Name</label><input className="inp" id="sbn" value={name} onChange={(e) => setName(e.target.value)} placeholder="Household supplies" /></div>
         <div><label className="lbl" htmlFor="sbc">Tracks category</label><select className="inp" id="sbc" value={cat} onChange={(e) => setCat(e.target.value)}>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></div>
         <div><label className="lbl" htmlFor="sbl">My monthly limit</label><input className="inp" id="sbl" inputMode="decimal" value={lim} onChange={(e) => setLim(e.target.value)} /></div>
-        <span className="small-muted" style={{ fontSize: 12.5 }}>Everyone sets their own limit; you'll each see the other's progress.</span>
+        <span className="small-muted" style={{ fontSize: 12.5 }}>Everyone sets their own limit. Someone's spending is only shown once they've set theirs.</span>
         <ErrorNote>{err}</ErrorNote>
         <button className="btn full">Create shared budget</button>
       </form>

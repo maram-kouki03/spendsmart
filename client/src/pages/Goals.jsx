@@ -134,6 +134,10 @@ function GoalForm({ initial, onDone }) {
   const [date, setDate] = useState(initial?.target_date || '');
   const [icon, setIcon] = useState(initial?.icon || 'star');
   const [err, setErr] = useState('');
+  const { sources, fmt, refresh } = useApp();
+  const deposited = initial?.deposited || 0; // money moved in from cards; a delete gives it back
+  const [returnTo, setReturnTo] = useState(null); // source id while "Return … to which card?" shows
+  const [deleting, setDeleting] = useState(false);
 
   async function submit(e) {
     e.preventDefault(); setErr('');
@@ -144,10 +148,46 @@ function GoalForm({ initial, onDone }) {
     try { onDone(initial ? await api.patch(`/goals/${initial.id}`, body) : await api.post('/goals', body), initial ? 'Goal updated' : 'Goal added'); }
     catch (e2) { setErr(e2.message); }
   }
-  async function remove() {
-    if (!window.confirm(`Delete ${initial.name}? Money you moved in stays logged in your transactions.`)) return;
-    await api.del(`/goals/${initial.id}`);
-    onDone(await api.get('/goals'), 'Goal deleted');
+  function remove() {
+    setErr('');
+    if (deposited > 0) { setReturnTo(sources[0]?.id || ''); return; } // ask where the money goes first
+    if (window.confirm(`Delete ${initial.name}?`)) destroy(null);
+  }
+  async function destroy(sourceId) {
+    setDeleting(true); setErr('');
+    try {
+      await api.del(`/goals/${initial.id}`, sourceId ? { return_to_source_id: sourceId } : undefined);
+      const src = sources.find((s) => s.id === sourceId);
+      refresh();
+      onDone(await api.get('/goals'), src ? `Goal deleted — ${fmt(deposited)} returned to ${src.name}` : 'Goal deleted');
+    } catch (e2) {
+      if (e2.code === 'return_source_required') setReturnTo(sources[0]?.id || '');
+      setErr(e2.message);
+    } finally { setDeleting(false); }
+  }
+
+  if (returnTo !== null) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ fontWeight: 600, fontSize: 16 }}>Return {fmt(deposited)} to which card?</div>
+        <span className="small-muted">
+          Deleting {initial.name} gives back the money you moved into it from your cards.
+          {initial.initial_saved > 0 && ` The ${fmt(initial.initial_saved)} you had saved before isn't on a card, so it isn't moved.`}
+        </span>
+        <div><label className="lbl" htmlFor="gr">Card or wallet</label>
+          <select className="inp" id="gr" value={returnTo} onChange={(e) => setReturnTo(e.target.value)}>
+            {sources.map((s) => <option key={s.id} value={s.id}>{s.name} · {fmt(s.balance)}</option>)}
+          </select>
+        </div>
+        <ErrorNote>{err}</ErrorNote>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" className="btn-o" onClick={() => { setReturnTo(null); setErr(''); }} disabled={deleting}>Cancel</button>
+          <button type="button" className="btn" style={{ flex: 1, background: '#B91C1C', color: '#fff' }} disabled={deleting || !returnTo} onClick={() => destroy(returnTo)}>
+            {deleting ? <span className="spin" /> : `Return ${fmt(deposited)} & delete goal`}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

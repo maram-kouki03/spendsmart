@@ -12,19 +12,23 @@ const KIND = {
   over: { bg: '#FEE2E2', fg: '#DC2626', circle: true },
   subscription: { bg: '#57400A', fg: '#FFF0B3', d: I.play, fill: true },
   split: { bg: '#FBCFE8', fg: '#9D174D', d: 'M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM2.5 20c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5' },
+  invite: { bg: '#E0E7FF', fg: '#3730A3', d: 'M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM2.5 20c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5M19 8v6M16 11h6' },
   info: { bg: '#FDF3D2', fg: '#8A6406', d: I.bell }
 };
 
 export default function Topbar({ heading, sub, tagline }) {
   const { summary, refresh, toast, sources } = useApp();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
+  const [meOpen, setMeOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const meWrap = useRef(null);
   const [items, setItems] = useState(null);
   const [q, setQ] = useState('');
   const wrap = useRef(null);
 
-  const name = summary?.profile?.full_name || user?.user_metadata?.full_name || '';
+  const name = summary?.profile?.full_name || user?.full_name || '';
   const email = user?.email || '';
   const unread = summary?.unread || 0;
 
@@ -42,13 +46,39 @@ export default function Topbar({ heading, sub, tagline }) {
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
+  useEffect(() => {
+    if (!meOpen) return undefined;
+    const onDoc = (e) => { if (!meWrap.current?.contains(e.target)) setMeOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setMeOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
+  }, [meOpen]);
+
+  async function logOut() {
+    setLeaving(true);
+    try {
+      await logout();
+      nav('/login', { replace: true });
+    } catch (e) {
+      setLeaving(false);
+      toast(e.message || 'Could not log out', 'err');
+    }
+  }
+
   async function markAll() {
     await api.post('/notifications/read-all');
     await Promise.all([load(), refresh()]);
   }
   async function respond(n, ok) {
     try {
-      if (ok) {
+      if (n.action === 'contact') {
+        await api.post(`/invites/${n.data.invite_id}/${ok ? 'accept' : 'decline'}`);
+        toast(ok ? 'Invitation accepted' : 'Invitation declined');
+      } else if (n.action === 'group') {
+        await api.post(`/groups/${n.data.group_id}/${ok ? 'accept' : 'decline'}`);
+        toast(ok ? 'You joined the group' : 'Invitation declined');
+      } else if (ok) {
         const src = sources[0];
         if (!src) throw new Error('Add a card or wallet first');
         await api.post(`/splits/${n.data.split_id}/accept`, { source_id: src.id });
@@ -59,6 +89,7 @@ export default function Topbar({ heading, sub, tagline }) {
       }
       await api.post(`/notifications/${n.id}/read`);
       await Promise.all([load(), refresh()]);
+      window.dispatchEvent(new CustomEvent('spendsmart:shared-changed'));
     } catch (e) { toast(e.message, 'err'); }
   }
 
@@ -115,10 +146,21 @@ export default function Topbar({ heading, sub, tagline }) {
         </div>
       </div>
 
-      <Link to="/settings" className="me-chip">
-        <span className="gold me-av">{initials(name, email)}</span>
-        <span className="me-name">{firstName(name, email)}</span>
-      </Link>
+      <div className="me-wrap" ref={meWrap}>
+        <button type="button" className="me-chip" aria-haspopup="menu" aria-expanded={meOpen} onClick={() => setMeOpen(!meOpen)}>
+          <span className="gold me-av">{initials(name, email)}</span>
+          <span className="me-name">{firstName(name, email)}</span>
+          <svg viewBox="0 0 24 24" className="me-caret" aria-hidden="true" style={{ transform: meOpen ? 'rotate(180deg)' : 'none' }}><path d="M6 9l6 6 6-6" /></svg>
+        </button>
+        <div role="menu" aria-label="Account" aria-hidden={!meOpen} className="me-menu"
+          style={{ opacity: meOpen ? 1 : 0, transform: meOpen ? 'scale(1) translateY(0)' : 'scale(.9) translateY(-6px)', visibility: meOpen ? 'visible' : 'hidden' }}>
+          {email && <div className="me-menu-email" title={email}>{email}</div>}
+          <Link role="menuitem" to="/settings" className="me-menu-item" tabIndex={meOpen ? 0 : -1} onClick={() => setMeOpen(false)}>Settings</Link>
+          <button role="menuitem" type="button" className="me-menu-item danger" tabIndex={meOpen ? 0 : -1} onClick={logOut} disabled={leaving}>
+            {leaving ? 'Logging out…' : 'Log out'}
+          </button>
+        </div>
+      </div>
     </header>
   );
 }

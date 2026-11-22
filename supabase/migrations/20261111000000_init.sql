@@ -1,13 +1,14 @@
 -- SpendSmart — initial schema
--- Run with `supabase db push`, or paste into the Supabase SQL editor.
+-- Apply with `npm run db:migrate -w server`. Plain PostgreSQL: no Supabase Auth or Storage.
+-- (Accounts, the profiles → users foreign key and RLS hardening come in 20261112000000_own_auth.sql.)
 
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------------------
--- Profiles (1:1 with auth.users)
+-- Profiles (1:1 with public.users — the foreign key is added in the next migration)
 -- ---------------------------------------------------------------------------
 create table if not exists public.profiles (
-  id            uuid primary key references auth.users (id) on delete cascade,
+  id            uuid primary key,
   full_name     text not null default '',
   email         text,
   currency      text not null default 'TND' check (currency in ('TND', 'EUR', 'USD')),
@@ -192,36 +193,9 @@ left join public.transactions t on t.source_id = s.id
 group by s.id;
 
 -- ---------------------------------------------------------------------------
--- New user → profile + three starter sources
--- ---------------------------------------------------------------------------
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, full_name, email)
-  values (new.id, coalesce(new.raw_user_meta_data ->> 'full_name', new.raw_user_meta_data ->> 'name', ''), new.email)
-  on conflict (id) do nothing;
-
-  insert into public.sources (user_id, name, kind, style, position) values
-    (new.id, 'Card 1', 'debit', 'g1', 0),
-    (new.id, 'Card 2', 'credit', 'g2', 1),
-    (new.id, 'Cash Wallet', 'cash', 'g3', 2);
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
-
--- ---------------------------------------------------------------------------
--- Row level security
--- The Node API uses the service-role key and scopes every query to the
--- signed-in user; these policies protect the tables from direct client access.
+-- Row level security: enabled with no policies, so Supabase's public Data API can't read
+-- anything. The Node API connects as the table owner and scopes every query to the
+-- signed-in user.
 -- ---------------------------------------------------------------------------
 alter table public.profiles             enable row level security;
 alter table public.sources              enable row level security;
@@ -236,24 +210,3 @@ alter table public.transactions         enable row level security;
 alter table public.budgets              enable row level security;
 alter table public.subscriptions        enable row level security;
 alter table public.notifications        enable row level security;
-
-create policy "own profile" on public.profiles for all using (id = auth.uid()) with check (id = auth.uid());
-create policy "own sources" on public.sources for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own goals" on public.goals for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own contacts" on public.contacts for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
-create policy "own groups" on public.groups for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
-create policy "member groups" on public.group_members for select using (user_id = auth.uid());
-create policy "my splits" on public.split_requests for select using (from_user = auth.uid() or to_user = auth.uid());
-create policy "own shared budgets" on public.shared_budgets for select using (created_by = auth.uid() or partner_id = auth.uid());
-create policy "own shared limits" on public.shared_budget_limits for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own transactions" on public.transactions for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own budgets" on public.budgets for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own subscriptions" on public.subscriptions for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-create policy "own notifications" on public.notifications for all using (user_id = auth.uid()) with check (user_id = auth.uid());
-
--- ---------------------------------------------------------------------------
--- Receipt photos (private bucket; the API uploads and signs URLs)
--- ---------------------------------------------------------------------------
-insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', false)
-on conflict (id) do nothing;

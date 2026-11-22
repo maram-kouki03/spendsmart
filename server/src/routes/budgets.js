@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { db } from '../supabase.js';
-import { ah, must, parse, HttpError } from '../lib/util.js';
+import { one, query, setClause } from '../db.js';
+import { ah, parse, provided, HttpError, uuidParam } from '../lib/util.js';
 import { CATEGORIES, getBudgets } from '../lib/finance.js';
 
 const r = Router();
+uuidParam(r, 'Budget not found');
 
 const schema = z.object({
   category: z.enum(CATEGORIES),
@@ -17,19 +18,25 @@ r.get('/budgets', ah(async (req, res) => res.json(await getBudgets(req.user.id))
 
 r.post('/budgets', ah(async (req, res) => {
   const body = parse(schema, req.body);
-  must(await db.from('budgets').insert({ ...body, user_id: req.user.id }));
+  await query(
+    'insert into public.budgets (user_id, category, name, monthly_limit, alert_threshold) values ($1, $2, $3, $4, $5)',
+    [req.user.id, body.category, body.name, body.monthly_limit, body.alert_threshold]
+  );
   res.status(201).json(await getBudgets(req.user.id));
 }));
 
 r.patch('/budgets/:id', ah(async (req, res) => {
-  const body = parse(schema.partial(), req.body);
-  const row = must(await db.from('budgets').update(body).eq('id', req.params.id).eq('user_id', req.user.id).select().maybeSingle());
+  const set = setClause(provided(parse(schema.partial(), req.body), req.body), 3);
+  const row = set
+    ? await one(`update public.budgets set ${set.sql} where id = $1 and user_id = $2 returning id`, [req.params.id, req.user.id, ...set.values])
+    : await one('select id from public.budgets where id = $1 and user_id = $2', [req.params.id, req.user.id]);
   if (!row) throw new HttpError(404, 'Budget not found');
   res.json(await getBudgets(req.user.id));
 }));
 
 r.delete('/budgets/:id', ah(async (req, res) => {
-  must(await db.from('budgets').delete().eq('id', req.params.id).eq('user_id', req.user.id));
+  const row = await one('delete from public.budgets where id = $1 and user_id = $2 returning id', [req.params.id, req.user.id]);
+  if (!row) throw new HttpError(404, 'Budget not found');
   res.status(204).end();
 }));
 
