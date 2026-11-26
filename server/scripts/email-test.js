@@ -1,21 +1,51 @@
 /**
- * Checks the SMTP settings in server/.env: connects + logs in (transporter.verify()), then sends a
- * test email to SMTP_USER. Never prints the password or other secrets.
+ * Checks the email settings in server/.env. With BREVO_API_KEY: sends one test email through Brevo's
+ * HTTP API. With SMTP: connects + logs in (transporter.verify()), then sends a test email to
+ * SMTP_USER. Never prints the password, the API key or other secrets.
  *
  *   npm run email:test -w server
  *   npm run email:test -w server -- someone@example.com   (send the test to another address)
  */
-import { createTransport, describeMailError, explainMailError, mailConfig, mailEnabled } from '../src/lib/mailer.js';
+import {
+  brevoEnabled,
+  createTransport,
+  describeMailError,
+  explainMailError,
+  mailConfig,
+  mailEnabled,
+  sendViaBrevo,
+} from '../src/lib/mailer.js';
 
 const mask = (v) => (v ? `${v.slice(0, 2)}***${v.includes('@') ? v.slice(v.indexOf('@')) : ''}` : '(empty)');
 const rawPass = process.env.SMTP_PASS ?? '';
+const TEST = {
+  subject: 'SpendSmart email test',
+  text: 'If you can read this, SpendSmart can send emails. 🎉',
+  html: '<p style="font-family:sans-serif">If you can read this, <b>SpendSmart</b> can send emails. 🎉</p>'
+};
 
 async function main() {
   if (!mailEnabled()) {
-    console.log('SMTP_HOST is empty → emails are printed in the server console instead of being sent. Nothing to test.');
+    console.log('BREVO_API_KEY and SMTP_HOST are empty → emails are printed in the server console instead of being sent. Nothing to test.');
     return;
   }
   const cfg = mailConfig();
+  if (brevoEnabled()) {
+    // Brevo HTTP API: there is no login step, so the test is one send. Needs a recipient.
+    const to = process.argv[2] || cfg.user || (cfg.from.match(/<([^>]+)>/) || [])[1] || cfg.from;
+    console.log('Brevo HTTP API (BREVO_API_KEY is set, SMTP settings are ignored)');
+    console.log(`  key     ${String(process.env.BREVO_API_KEY).trim().length} characters`);
+    console.log(`  from    ${cfg.from.replace(/<([^>]+)>/, (_, a) => `<${mask(a)}>`)}`);
+    process.stdout.write(`\nSending a test email to ${mask(to)} … `);
+    try {
+      await sendViaBrevo({ from: cfg.from, to, ...TEST });
+      console.log('OK');
+      console.log(`\n✅ Brevo accepted the email. Check the inbox (and spam) of ${mask(to)}.`);
+    } catch (e) {
+      fail(e);
+    }
+    return;
+  }
   console.log('SMTP settings (as the server will use them):');
   console.log(`  host    ${cfg.host}`);
   console.log(`  port    ${cfg.port} (${cfg.secure ? 'TLS from the start' : 'STARTTLS required'})`);
@@ -41,9 +71,7 @@ async function main() {
     const info = await t.sendMail({
       from: cfg.from,
       to,
-      subject: 'SpendSmart SMTP test',
-      text: 'If you can read this, SpendSmart can send emails. 🎉',
-      html: '<p style="font-family:sans-serif">If you can read this, <b>SpendSmart</b> can send emails. 🎉</p>'
+      ...TEST
     });
     console.log('OK');
     console.log(`\n✅ Email sent (${info.response || 'accepted'}). Check the inbox (and spam) of ${mask(to)}.`);

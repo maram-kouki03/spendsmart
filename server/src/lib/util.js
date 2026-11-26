@@ -1,11 +1,15 @@
 export class HttpError extends Error {
   /** `code` is an optional machine-readable reason the client can branch on; `extra` is merged into the JSON body. */
-  constructor(status, message, code, extra) { super(message); this.status = status; this.code = code; this.extra = extra; }
+  constructor(status, message, code, extra) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.extra = extra;
+  }
 }
 
 /** Wraps an async route so thrown errors reach the error middleware. */
 export const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-
 
 /** Parses a zod schema or throws a 400 with the first message. */
 export function parse(schema, input) {
@@ -28,7 +32,16 @@ const fmtCache = new Map();
 function partsFormatter(tz) {
   let f = fmtCache.get(tz);
   if (!f) {
-    f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    f = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
     fmtCache.set(tz, f);
   }
   return f;
@@ -36,14 +49,23 @@ function partsFormatter(tz) {
 
 export function isValidTimeZone(tz) {
   if (typeof tz !== 'string' || !tz || tz.length > 64) return false;
-  try { partsFormatter(tz); return true; } catch { return false; }
+  try {
+    partsFormatter(tz);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const zone = (tz) => (isValidTimeZone(tz) ? tz : DEFAULT_TZ);
 
 /** Wall-clock parts of instant `d` in `tz` (month is 0-based). */
 export function zonedParts(d, tz) {
-  const p = Object.fromEntries(partsFormatter(zone(tz)).formatToParts(d).map((x) => [x.type, x.value]));
+  const p = Object.fromEntries(
+    partsFormatter(zone(tz))
+      .formatToParts(d)
+      .map((x) => [x.type, x.value])
+  );
   return { y: +p.year, m: +p.month - 1, d: +p.day, h: +p.hour, min: +p.minute, s: +p.second };
 }
 

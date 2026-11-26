@@ -17,7 +17,10 @@ export function useApi(path, { minDelay = 0 } = {}) {
       const d = await api.get(path);
       const wait = minDelay - (Date.now() - t0);
       if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      if (n === live.current) { setData(d); setError(''); }
+      if (n === live.current) {
+        setData(d);
+        setError('');
+      }
     } catch (e) {
       if (n === live.current) setError(e.message);
     } finally {
@@ -25,6 +28,8 @@ export function useApi(path, { minDelay = 0 } = {}) {
     }
   }, [path, minDelay]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
   return { data, setData, error, loading, reload: load };
 }

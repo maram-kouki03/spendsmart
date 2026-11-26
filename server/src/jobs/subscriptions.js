@@ -45,7 +45,8 @@ async function chargeDue(c, id, now) {
        from public.subscriptions s join public.profiles p on p.id = s.user_id
       where s.id = $1
       for update of s`,
-    [id], c
+    [id],
+    c
   );
   if (!s || !s.active) return { charged: 0, reminded: false };
   const tz = s.timezone;
@@ -61,22 +62,30 @@ async function chargeDue(c, id, now) {
            (user_id, source_id, kind, name, category, amount, occurred_at, note, subscription_id, subscription_period)
          values ($1, $2, 'expense', $3, 'Bills', $4, $5, 'Subscription renewal', $6, $7)
          on conflict (subscription_id, subscription_period) where subscription_id is not null do nothing`,
-        [s.user_id, s.source_id, s.name, s.price, at.toISOString(), s.id, next], c
+        [s.user_id, s.source_id, s.name, s.price, at.toISOString(), s.id, next],
+        c
       );
       charged += r.rowCount;
     }
     next = addMonth(next);
   }
-  if (next !== s.next_renewal) await query('update public.subscriptions set next_renewal = $1 where id = $2', [next, s.id], c);
+  if (next !== s.next_renewal)
+    await query('update public.subscriptions set next_renewal = $1 where id = $2', [next, s.id], c);
 
   const days = daysUntil(next, tz, now);
   let reminded = false;
   if (s.notify_subs && days >= 0 && days <= REMIND_DAYS) {
-    await notify(s.user_id, {
-      type: 'subscription',
-      title: `${s.name} renews ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}`,
-      body: money(s.price, s.currency), data: { subscription_id: s.id }, dedupe_key: `sub:${s.id}:${next}`
-    }, c);
+    await notify(
+      s.user_id,
+      {
+        type: 'subscription',
+        title: `${s.name} renews ${days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`}`,
+        body: money(s.price, s.currency),
+        data: { subscription_id: s.id },
+        dedupe_key: `sub:${s.id}:${next}`,
+      },
+      c
+    );
     reminded = true;
   }
   return { charged, reminded };
@@ -97,7 +106,8 @@ export async function runSubscriptionJob({ now = new Date() } = {}) {
          from public.subscriptions s join public.profiles p on p.id = s.user_id
         where s.active and s.next_renewal <= ($2::timestamptz at time zone p.timezone)::date + $1::int
         order by s.next_renewal`,
-      [REMIND_DAYS, now.toISOString()], c
+      [REMIND_DAYS, now.toISOString()],
+      c
     );
     const out = { processed: due.length, charged: 0, reminded: 0, failed: 0 };
     for (const { id } of due) {
@@ -119,12 +129,14 @@ export async function runSubscriptionJob({ now = new Date() } = {}) {
 
 /** Runs the job now and then every hour; the timer doesn't keep the process alive. */
 export function scheduleSubscriptionJob() {
-  const run = () => runSubscriptionJob()
-    .then((r) => {
-      if (r.skipped) return;
-      if (r.charged || r.failed) console.log(`Subscriptions: ${r.charged} renewal(s) charged, ${r.reminded} reminder(s), ${r.failed} failed`);
-    })
-    .catch((e) => console.error('Subscription job failed:', e.message));
+  const run = () =>
+    runSubscriptionJob()
+      .then((r) => {
+        if (r.skipped) return;
+        if (r.charged || r.failed)
+          console.log(`Subscriptions: ${r.charged} renewal(s) charged, ${r.reminded} reminder(s), ${r.failed} failed`);
+      })
+      .catch((e) => console.error('Subscription job failed:', e.message));
   run();
   setInterval(run, HOUR).unref();
 }

@@ -20,7 +20,11 @@ export const todayISO = () => {
 };
 
 const DAY = 86400000;
-const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const startOfDay = (d) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
 
 export function dayLabel(iso) {
   const d = new Date(iso);
@@ -48,9 +52,15 @@ export function timeAgo(iso) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export const time = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
-export const shortDate = (iso) => new Date(iso.length === 10 ? iso + 'T00:00:00' : iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-export const monthYear = (iso) => new Date(iso.length === 10 ? iso + 'T00:00:00' : iso).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+export const time = (iso) =>
+  new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
+export const shortDate = (iso) =>
+  new Date(iso.length === 10 ? iso + 'T00:00:00' : iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+export const monthYear = (iso) =>
+  new Date(iso.length === 10 ? iso + 'T00:00:00' : iso).toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric',
+  });
 
 export function initials(name = '', email = '') {
   const p = name.trim().split(/\s+/).filter(Boolean);
@@ -58,7 +68,8 @@ export function initials(name = '', email = '') {
   if (p.length === 1) return p[0].slice(0, 2).toUpperCase();
   return (email || '?').slice(0, 2).toUpperCase();
 }
-export const firstName = (name = '', email = '') => name.trim().split(/\s+/)[0] || (email || '').split('@')[0] || 'there';
+export const firstName = (name = '', email = '') =>
+  name.trim().split(/\s+/)[0] || (email || '').split('@')[0] || 'there';
 
 export function renewText(days) {
   if (days <= 0) return 'Renews today';
@@ -68,16 +79,26 @@ export function renewText(days) {
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 /** 'YYYY-MM-DD' → { y, m (0-based), d }, read as a calendar day (no time zone shift). */
-const ymdParts = (ymd) => { const [y, m, d] = ymd.split('-').map(Number); return { y, m: m - 1, d }; };
+const ymdParts = (ymd) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return { y, m: m - 1, d };
+};
 
 /** "Nov 1 – 30", "Nov 24 – Dec 1", "Dec 1 – Feb 28" (both 'YYYY-MM-DD', inclusive). */
 export function dateRange(start, end) {
-  const a = ymdParts(start), b = ymdParts(end);
+  const a = ymdParts(start),
+    b = ymdParts(end);
   const same = a.y === b.y && a.m === b.m;
   return `${MON[a.m]} ${a.d} – ${same ? '' : `${MON[b.m]} `}${b.d}`;
 }
 
-const PERIOD_NAME = { week: 'This week', month: 'This month', quarter: '3 months', year: 'This year', custom: 'Custom' };
+const PERIOD_NAME = {
+  week: 'This week',
+  month: 'This month',
+  quarter: '3 months',
+  year: 'This year',
+  custom: 'Custom',
+};
 /**
  * A budget's period in plain words: "This month · Nov 1 – 30", "Custom · Dec 1 – Feb 28".
  * A custom budget outside its dates says so ("· ended" / "· not started").

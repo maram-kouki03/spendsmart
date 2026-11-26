@@ -13,7 +13,13 @@ export function Icon({ d, size, className = '', style, children, ...rest }) {
   );
 }
 
-const reduced = () => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
+const reduced = () => {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+};
 const ease = (t) => 1 - Math.pow(1 - t, 3);
 
 /** Count-up number. Animates from `from` (or the last shown value) to `value`. */
@@ -26,15 +32,21 @@ export function Num({ value = 0, from = 0, decimals = 2, prefix = '', suffix, st
 
   useEffect(() => {
     if (!start) return undefined;
-    const a = curRef.current, b = Number(value) || 0;
+    const a = curRef.current,
+      b = Number(value) || 0;
     cancelAnimationFrame(raf.current);
-    if (reduced() || a === b) { curRef.current = b; setCur(b); return undefined; }
+    if (reduced() || a === b) {
+      curRef.current = b;
+      setCur(b);
+      return undefined;
+    }
     let t0 = null;
     const step = (ts) => {
       if (t0 === null) t0 = ts;
       const t = Math.min(1, (ts - t0) / duration);
       const v = a + (b - a) * ease(t);
-      curRef.current = v; setCur(v);
+      curRef.current = v;
+      setCur(v);
       if (t < 1) raf.current = requestAnimationFrame(step);
     };
     raf.current = requestAnimationFrame(step);
@@ -48,13 +60,22 @@ export function Num({ value = 0, from = 0, decimals = 2, prefix = '', suffix, st
 export function LogoMark({ size = 40 }) {
   return (
     <span className="gold logo-mark" style={{ width: size, height: size, borderRadius: size * 0.33 }}>
-      <Icon d={I.wallet}><circle cx="16" cy="14" r="1.3" /></Icon>
+      <Icon d={I.wallet}>
+        <circle cx="16" cy="14" r="1.3" />
+      </Icon>
     </span>
   );
 }
 
 export function Coin({ size = 44, spin = false, className = '', style, label = 'DT' }) {
-  return <span className={`coin ${spin ? 'coinspin' : ''} ${className}`} aria-hidden="true" style={{ '--s': `${size}px`, ...style }}>{label}</span>;
+  return (
+    <span
+      className={`coin ${spin ? 'coinspin' : ''} ${className}`}
+      aria-hidden="true"
+      data-label={label}
+      style={{ '--s': `${size}px`, ...style }}
+    />
+  );
 }
 
 /** The glossy 3D gold wallet from the landing and login screens. */
@@ -62,35 +83,69 @@ export function Wallet3D({ layers = 4 }) {
   const z = layers === 4 ? [-16, -12, -8, -4] : [-14, -9, -4];
   return (
     <div className="w3d">
-      {z.map((v, i) => <span key={v} className="ly" style={{ transform: `translateZ(${v}px)`, background: i === z.length - 1 ? '#EDCF6E' : undefined }} />)}
-      <span className="face" /><span className="stitch" /><span className="gloss" /><span className="flap" />
-      <span className="clasp"><i /></span>
+      {z.map((v, i) => (
+        <span
+          key={v}
+          className="ly"
+          style={{ transform: `translateZ(${v}px)`, background: i === z.length - 1 ? '#EDCF6E' : undefined }}
+        />
+      ))}
+      <span className="face" />
+      <span className="stitch" />
+      <span className="gloss" />
+      <span className="flap" />
+      <span className="clasp">
+        <i />
+      </span>
     </div>
   );
 }
 
 export function Seg({ options, value, onChange, label, role = 'tablist', style }) {
-  const i = Math.max(0, options.findIndex((o) => o.value === value));
+  const i = Math.max(
+    0,
+    options.findIndex((o) => o.value === value)
+  );
   const n = options.length;
   const itemRole = role === 'radiogroup' ? 'radio' : 'tab';
   return (
     <div className="seg" role={role} aria-label={label} style={style}>
-      <span className="thumb" style={{ width: `calc(${100 / n}% - ${8 / n}px)`, transform: `translateX(${i * 100}%)` }} />
+      <span
+        className="thumb"
+        style={{ width: `calc(${100 / n}% - ${8 / n}px)`, transform: `translateX(${i * 100}%)` }}
+      />
       {options.map((o) => (
-        <button key={o.value} type="button" className={o.value === value ? 'on' : ''} role={itemRole}
+        <button
+          key={o.value}
+          type="button"
+          className={o.value === value ? 'on' : ''}
+          role={itemRole}
           aria-selected={itemRole === 'tab' ? o.value === value : undefined}
           aria-checked={itemRole === 'radio' ? o.value === value : undefined}
-          onClick={() => onChange(o.value)}>{o.label}</button>
+          onClick={() => onChange(o.value)}
+        >
+          {o.label}
+        </button>
       ))}
     </div>
   );
 }
 
 export function Switch({ on, onChange, label }) {
-  return <button type="button" className={`sw ${on ? '' : 'off'}`} role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} />;
+  return (
+    <button
+      type="button"
+      className={`sw ${on ? '' : 'off'}`}
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+    />
+  );
 }
 
-const FIELD = 'input:not([type="hidden"]):not([hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])';
+const FIELD =
+  'input:not([type="hidden"]):not([hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])';
 const FOCUSABLE = `${FIELD}, button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])`;
 
 /**
@@ -109,16 +164,30 @@ export function Modal({ open, onClose, title, children, width = 460 }) {
     if (!open) return undefined;
     const prev = document.activeElement;
     const node = ref.current;
-    (node?.querySelector(`.modal-body ${FIELD}`) || node?.querySelector('.modal-body button') || node?.querySelector('button'))?.focus();
+    (
+      node?.querySelector(`.modal-body ${FIELD}`) ||
+      node?.querySelector('.modal-body button') ||
+      node?.querySelector('button')
+    )?.focus();
     const onKey = (e) => {
       // Menus and inputs inside that handle Escape themselves call preventDefault / stopPropagation.
-      if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); closeRef.current(); return; }
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        e.preventDefault();
+        closeRef.current();
+        return;
+      }
       if (e.key !== 'Tab' || !node) return;
       const list = [...node.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
       if (!list.length) return;
-      const firstEl = list[0], lastEl = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
-      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+      const firstEl = list[0],
+        lastEl = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
     };
     node?.addEventListener('keydown', onKey);
     const overflow = document.body.style.overflow;
@@ -132,11 +201,29 @@ export function Modal({ open, onClose, title, children, width = 460 }) {
 
   if (!open) return null;
   return (
-    <div className="modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} style={{ maxWidth: width }}>
+    // The backdrop only catches clicks outside the window; keyboard users close it with Escape (handled above).
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div
+      className="modal-back"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        ref={ref}
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={{ maxWidth: width }}
+      >
         <div className="modal-head">
-          <h2 className="modal-title" id={titleId}>{title}</h2>
-          <button type="button" className="x-btn" aria-label="Close" onClick={onClose}><Icon d={I.close} size={18} /></button>
+          <h2 className="modal-title" id={titleId}>
+            {title}
+          </h2>
+          <button type="button" className="x-btn" aria-label="Close" onClick={onClose}>
+            <Icon d={I.close} size={18} />
+          </button>
         </div>
         <div className="modal-body">{children}</div>
       </div>
@@ -145,7 +232,11 @@ export function Modal({ open, onClose, title, children, width = 460 }) {
 }
 
 export function BankCard({ source, children, className = '', style }) {
-  return <div className={`bank ${source?.style || 'g1'} ${className}`} style={style}>{children}</div>;
+  return (
+    <div className={`bank ${source?.style || 'g1'} ${className}`} style={style}>
+      {children}
+    </div>
+  );
 }
 
 export function SkeletonRows({ n = 4 }) {
@@ -167,20 +258,36 @@ export function SkeletonRows({ n = 4 }) {
 
 export function ErrorNote({ children }) {
   if (!children) return null;
-  return <div className="err-note" role="alert"><Icon d={I.warn} size={18} />{children}</div>;
+  return (
+    <div className="err-note" role="alert">
+      <Icon d={I.warn} size={18} />
+      {children}
+    </div>
+  );
 }
 
 export function Mascot({ size = 72 }) {
   return (
     <div className="mascot" role="img" aria-label="Smiling coin mascot">
       <svg viewBox="0 0 80 80" width={size} height={size} aria-hidden="true">
-        <defs><radialGradient id="mc" cx=".35" cy=".3" r=".8"><stop offset="0" stopColor="#FFF6D0" /><stop offset=".35" stopColor="#FDEEB2" /><stop offset=".7" stopColor="#FBE38E" /><stop offset="1" stopColor="#F2D06B" /></radialGradient></defs>
+        <defs>
+          <radialGradient id="mc" cx=".35" cy=".3" r=".8">
+            <stop offset="0" stopColor="#FFF6D0" />
+            <stop offset=".35" stopColor="#FDEEB2" />
+            <stop offset=".7" stopColor="#FBE38E" />
+            <stop offset="1" stopColor="#F2D06B" />
+          </radialGradient>
+        </defs>
         <ellipse cx="40" cy="76" rx="20" ry="3" fill="#8A6406" opacity=".2" />
-        <circle cx="40" cy="38" r="32" fill="url(#mc)" /><circle cx="40" cy="38" r="26" fill="none" stroke="#F2D06B" strokeWidth="3" opacity=".7" />
-        <circle cx="31" cy="34" r="3.4" fill="#3B2F12" /><circle cx="49" cy="34" r="3.4" fill="#3B2F12" />
-        <circle cx="32.2" cy="32.8" r="1.1" fill="#fff" /><circle cx="50.2" cy="32.8" r="1.1" fill="#fff" />
+        <circle cx="40" cy="38" r="32" fill="url(#mc)" />
+        <circle cx="40" cy="38" r="26" fill="none" stroke="#F2D06B" strokeWidth="3" opacity=".7" />
+        <circle cx="31" cy="34" r="3.4" fill="#3B2F12" />
+        <circle cx="49" cy="34" r="3.4" fill="#3B2F12" />
+        <circle cx="32.2" cy="32.8" r="1.1" fill="#fff" />
+        <circle cx="50.2" cy="32.8" r="1.1" fill="#fff" />
         <path d="M31 44c4 5 14 5 18 0" fill="none" stroke="#3B2F12" strokeWidth="3" strokeLinecap="round" />
-        <circle cx="25" cy="42" r="3.5" fill="#F59E0B" opacity=".35" /><circle cx="55" cy="42" r="3.5" fill="#F59E0B" opacity=".35" />
+        <circle cx="25" cy="42" r="3.5" fill="#F59E0B" opacity=".35" />
+        <circle cx="55" cy="42" r="3.5" fill="#F59E0B" opacity=".35" />
       </svg>
     </div>
   );
@@ -189,20 +296,49 @@ export function Mascot({ size = 72 }) {
 /** Coin confetti burst used on the "Purchase saved" screen. */
 const COLS = ['#FBE38E', '#FDEEB2', '#FFF0B3', '#F2D06B', '#8A6406', '#FDF3D2'];
 const PIECES = Array.from({ length: 18 }, (_, i) => {
-  const a = (i / 18) * Math.PI * 2, d = 90 + (i % 3) * 35;
-  return { x: Math.round(Math.cos(a) * d), y: Math.round(Math.sin(a) * d * 0.8), r: (i * 47) % 360, bg: COLS[i % COLS.length], c: i % 4 === 0, d: (i % 5) * 0.03 };
+  const a = (i / 18) * Math.PI * 2,
+    d = 90 + (i % 3) * 35;
+  return {
+    x: Math.round(Math.cos(a) * d),
+    y: Math.round(Math.sin(a) * d * 0.8),
+    r: (i * 47) % 360,
+    bg: COLS[i % COLS.length],
+    c: i % 4 === 0,
+    d: (i % 5) * 0.03,
+  };
 });
 export function Burst() {
   return (
     <div className="burst" style={{ top: 60, left: 60 }}>
-      {PIECES.map((p, k) => <i key={k} className={p.c ? 'c' : ''} style={{ '--x': `${p.x}px`, '--y': `${p.y}px`, '--r': `${p.r}deg`, background: p.bg, animationDelay: `${p.d}s` }} />)}
+      {PIECES.map((p, k) => (
+        <i
+          key={k}
+          className={p.c ? 'c' : ''}
+          style={{
+            '--x': `${p.x}px`,
+            '--y': `${p.y}px`,
+            '--r': `${p.r}deg`,
+            background: p.bg,
+            animationDelay: `${p.d}s`,
+          }}
+        />
+      ))}
     </div>
   );
 }
 
 export function Avatar({ initials, bg = '#FFF0B3', fg = '#57400A', size = 42, gold = false, style }) {
   return (
-    <span className={gold ? 'gold avatar' : 'avatar'} style={{ width: size, height: size, fontSize: size * 0.32, ...(gold ? {} : { background: bg, color: fg }), ...style }}>
+    <span
+      className={gold ? 'gold avatar' : 'avatar'}
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.32,
+        ...(gold ? {} : { background: bg, color: fg }),
+        ...style,
+      }}
+    >
       {initials}
     </span>
   );

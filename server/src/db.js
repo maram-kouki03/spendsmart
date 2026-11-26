@@ -10,7 +10,9 @@ types.setTypeParser(1082, (v) => v); // date
 
 const raw = process.env.DATABASE_URL;
 if (!raw) {
-  console.error('Missing DATABASE_URL. Copy server/.env.example to server/.env and paste your Supabase pooler connection string.');
+  console.error(
+    'Missing DATABASE_URL. Copy server/.env.example to server/.env and paste your Supabase pooler connection string.'
+  );
   process.exit(1);
 }
 
@@ -35,10 +37,13 @@ function poolConfig(url) {
     u.searchParams.delete('sslmode');
     connectionString = u.toString();
     local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname);
-  } catch { /* not a URL — let pg report it */ }
+  } catch {
+    /* not a URL — let pg report it */
+  }
   const ssl = local || process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false };
   return {
-    connectionString, ssl,
+    connectionString,
+    ssl,
     max: Number(process.env.PG_POOL_MAX) || 10,
     idleTimeoutMillis: 30000,
     // Give up on a connection attempt after 10 s instead of waiting forever (an unreachable or
@@ -47,7 +52,7 @@ function poolConfig(url) {
     // Client-side limit on every query, inside or outside a transaction: one whose answer never
     // arrives (dead network, or a slow single statement outside a transaction, which has no
     // server-side statement_timeout) fails after 20 s, and its connection is thrown away.
-    query_timeout: 20000
+    query_timeout: 20000,
   };
 }
 
@@ -61,8 +66,22 @@ pool.on('error', (err) => console.error('Postgres pool error:', err.message));
 /** True for errors that mean "the database can't be reached / didn't answer in time". */
 export function isDbUnavailable(err) {
   const m = String(err?.message || '');
-  return ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', '57P01', '57P03', '08000', '08001', '08003', '08006'].includes(err?.code)
-    || /timeout exceeded when trying to connect|Connection terminated|Query read timeout|connection timeout/i.test(m);
+  return (
+    [
+      'ECONNREFUSED',
+      'ECONNRESET',
+      'ETIMEDOUT',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      '57P01',
+      '57P03',
+      '08000',
+      '08001',
+      '08003',
+      '08006',
+    ].includes(err?.code) ||
+    /timeout exceeded when trying to connect|Connection terminated|Query read timeout|connection timeout/i.test(m)
+  );
 }
 
 /** Run a parameterized query on the pool, or on `ex` (a transaction client) when given. */
@@ -105,8 +124,12 @@ export async function tx(fn, { statementTimeout = STATEMENT_TIMEOUT_MS, idleTime
     await client.query('commit');
     return out;
   } catch (err) {
-    if (isDbUnavailable(err)) broken = err; // the connection's state is unknown: don't reuse it
-    else await client.query('rollback').catch((e) => { broken = e; });
+    if (isDbUnavailable(err))
+      broken = err; // the connection's state is unknown: don't reuse it
+    else
+      await client.query('rollback').catch((e) => {
+        broken = e;
+      });
     throw err;
   } finally {
     client.release(broken);
@@ -129,7 +152,7 @@ export function setClause(fields, startAt = 1) {
   if (!keys.length) return null;
   return {
     sql: keys.map((k, i) => `${ident(k)} = $${startAt + i}`).join(', '),
-    values: keys.map((k) => fields[k])
+    values: keys.map((k) => fields[k]),
   };
 }
 
@@ -141,12 +164,17 @@ export async function insertRows(ex, table, rows, suffix = '') {
   if (!rows.length) return [];
   const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const values = [];
-  const tuples = rows.map((r) => `(${cols.map((c) => {
-    if (!(c in r) || r[c] === undefined) return 'DEFAULT';
-    const v = r[c];
-    values.push(v !== null && typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v);
-    return `$${values.length}`;
-  }).join(', ')})`);
+  const tuples = rows.map(
+    (r) =>
+      `(${cols
+        .map((c) => {
+          if (!(c in r) || r[c] === undefined) return 'DEFAULT';
+          const v = r[c];
+          values.push(v !== null && typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v);
+          return `$${values.length}`;
+        })
+        .join(', ')})`
+  );
   const sql = `insert into ${ident('public')}.${ident(table)} (${cols.map(ident).join(', ')}) values ${tuples.join(', ')} ${suffix}`;
   return (await ex.query(sql, values)).rows;
 }

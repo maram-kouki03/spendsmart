@@ -26,12 +26,14 @@ export function parseOccurredAt(value, tz, now = new Date()) {
   if (m) {
     const [y, mo, d] = [+m[1], +m[2] - 1, +m[3]];
     const check = new Date(Date.UTC(y, mo, d));
-    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo || check.getUTCDate() !== d) throw bad('Not a valid date');
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo || check.getUTCDate() !== d)
+      throw bad('Not a valid date');
     if (value === localYmd(now, tz)) return now;
     const p = zonedParts(now, tz);
     at = zonedTime(y, mo, d, tz, p.h, p.min);
   } else {
-    if (!z.string().datetime({ offset: true }).safeParse(value).success) throw bad('Use a date (YYYY-MM-DD) or an ISO date-time');
+    if (!z.string().datetime({ offset: true }).safeParse(value).success)
+      throw bad('Use a date (YYYY-MM-DD) or an ISO date-time');
     at = new Date(value);
   }
   if (isNaN(at)) throw bad('Not a valid date');
@@ -40,45 +42,54 @@ export function parseOccurredAt(value, tz, now = new Date()) {
   return at;
 }
 
-r.get('/transactions', ah(async (req, res) => {
-  const q = parse(z.object({
-    kind: z.enum(['expense', 'income', 'goal']).optional(),
-    source: z.string().uuid().optional(),
-    category: z.string().max(40).optional(),
-    from: z.string().datetime({ offset: true }).optional(),
-    to: z.string().datetime({ offset: true }).optional(),
-    q: z.string().max(80).optional(),
-    limit: z.coerce.number().int().min(1).max(1000).default(300)
-  }), req.query);
+r.get(
+  '/transactions',
+  ah(async (req, res) => {
+    const q = parse(
+      z.object({
+        kind: z.enum(['expense', 'income', 'goal']).optional(),
+        source: z.string().uuid().optional(),
+        category: z.string().max(40).optional(),
+        from: z.string().datetime({ offset: true }).optional(),
+        to: z.string().datetime({ offset: true }).optional(),
+        q: z.string().max(80).optional(),
+        limit: z.coerce.number().int().min(1).max(1000).default(300),
+      }),
+      req.query
+    );
 
-  const where = ['t.user_id = $1'];
-  const params = [req.user.id];
-  const add = (cond, value) => { params.push(value); where.push(cond.replace('?', `$${params.length}`)); };
-  if (q.kind) add('t.kind = ?', q.kind);
-  if (q.source) add('t.source_id = ?', q.source);
-  if (q.category) add('t.category = ?', q.category);
-  if (q.from) add('t.occurred_at >= ?', q.from);
-  if (q.to) add('t.occurred_at < ?', q.to);
-  const term = q.q?.trim();
-  if (term) {
-    params.push(likeTerm(term));
-    const n = `$${params.length}`;
-    where.push(`(t.name ilike ${n} or t.note ilike ${n} or t.category ilike ${n})`);
-  }
-  params.push(q.limit);
+    const where = ['t.user_id = $1'];
+    const params = [req.user.id];
+    const add = (cond, value) => {
+      params.push(value);
+      where.push(cond.replace('?', `$${params.length}`));
+    };
+    if (q.kind) add('t.kind = ?', q.kind);
+    if (q.source) add('t.source_id = ?', q.source);
+    if (q.category) add('t.category = ?', q.category);
+    if (q.from) add('t.occurred_at >= ?', q.from);
+    if (q.to) add('t.occurred_at < ?', q.to);
+    const term = q.q?.trim();
+    if (term) {
+      params.push(likeTerm(term));
+      const n = `$${params.length}`;
+      where.push(`(t.name ilike ${n} or t.note ilike ${n} or t.category ilike ${n})`);
+    }
+    params.push(q.limit);
 
-  // Archived cards keep their history: the source name is still shown (with `archived`).
-  const rows = await many(
-    `select t.*, json_build_object('id', s.id, 'name', s.name, 'archived', s.archived_at is not null) as source
+    // Archived cards keep their history: the source name is still shown (with `archived`).
+    const rows = await many(
+      `select t.*, json_build_object('id', s.id, 'name', s.name, 'archived', s.archived_at is not null) as source
        from public.transactions t
        left join public.sources s on s.id = t.source_id
       where ${where.join(' and ')}
       order by t.occurred_at desc
       limit $${params.length}`,
-    params
-  );
-  res.json(rows);
-}));
+      params
+    );
+    res.json(rows);
+  })
+);
 
 const txSchema = z.object({
   kind: z.enum(['expense', 'income']),
@@ -87,34 +98,64 @@ const txSchema = z.object({
   amount: z.coerce.number().positive().max(1e8),
   source_id: z.string().uuid(),
   occurred_at: z.string().max(40).optional().nullable(),
-  note: z.string().max(240).optional().nullable()
+  note: z.string().max(240).optional().nullable(),
 });
 
-r.post('/transactions', ah(async (req, res) => {
-  const body = parse(txSchema, req.body);
-  const category = body.kind === 'income' ? 'Income' : (body.category || 'More');
-  if (body.kind === 'expense' && !CATEGORIES.includes(category)) throw new HttpError(400, 'Unknown category');
-  const occurred = parseOccurredAt(body.occurred_at, req.profile.timezone);
+r.post(
+  '/transactions',
+  ah(async (req, res) => {
+    const body = parse(txSchema, req.body);
+    const category = body.kind === 'income' ? 'Income' : body.category || 'More';
+    if (body.kind === 'expense' && !CATEGORIES.includes(category)) throw new HttpError(400, 'Unknown category');
+    const occurred = parseOccurredAt(body.occurred_at, req.profile.timezone);
 
-  const before = await getActiveSource(req.user.id, body.source_id);
-  const amount = round2(body.amount);
-  const { transaction, budgets } = await tx(async (c) => {
-    const t = await one(
-      `insert into public.transactions (user_id, source_id, kind, name, category, amount, occurred_at, note)
+    const before = await getActiveSource(req.user.id, body.source_id);
+    const amount = round2(body.amount);
+    const { transaction, budgets } = await tx(async (c) => {
+      const t = await one(
+        `insert into public.transactions (user_id, source_id, kind, name, category, amount, occurred_at, note)
        values ($1, $2, $3, $4, $5, $6, $7, $8) returning *`,
-      [req.user.id, body.source_id, body.kind, body.name, category, amount, occurred.toISOString(), body.note || null], c
-    );
-    const b = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount, occurred, c) : [];
-    return { transaction: t, budgets: b };
-  });
-  const after = round2(before.balance + (body.kind === 'income' ? amount : -amount));
-  res.status(201).json({ transaction, source: { id: before.id, name: before.name, style: before.style, last4: before.last4, before: before.balance, after }, budgets });
-}));
+        [
+          req.user.id,
+          body.source_id,
+          body.kind,
+          body.name,
+          category,
+          amount,
+          occurred.toISOString(),
+          body.note || null,
+        ],
+        c
+      );
+      const b = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount, occurred, c) : [];
+      return { transaction: t, budgets: b };
+    });
+    const after = round2(before.balance + (body.kind === 'income' ? amount : -amount));
+    res.status(201).json({
+      transaction,
+      source: {
+        id: before.id,
+        name: before.name,
+        style: before.style,
+        last4: before.last4,
+        before: before.balance,
+        after,
+      },
+      budgets,
+    });
+  })
+);
 
-r.delete('/transactions/:id', ah(async (req, res) => {
-  const t = await one('delete from public.transactions where id = $1 and user_id = $2 returning id', [req.params.id, req.user.id]);
-  if (!t) throw new HttpError(404, 'Transaction not found');
-  res.status(204).end();
-}));
+r.delete(
+  '/transactions/:id',
+  ah(async (req, res) => {
+    const t = await one('delete from public.transactions where id = $1 and user_id = $2 returning id', [
+      req.params.id,
+      req.user.id,
+    ]);
+    if (!t) throw new HttpError(404, 'Transaction not found');
+    res.status(204).end();
+  })
+);
 
 export default r;

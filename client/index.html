@@ -4,14 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#FFFBEF" />
-    <meta name="description" content="SpendSmart — cards, cash, budgets, shared bills and renewals in one warm little place." />
+    <meta name="description" content="SpendSmart helps students track cards and cash, set budgets for any period, split shared bills and never miss a subscription renewal." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Poppins:wght@400;500;600;700&display=swap" />
+    <!-- Only the weights in use (Caveat 700 for taglines, Poppins 400–700). Loaded without blocking the
+         first paint (media swap), with display=swap; <noscript> keeps the plain stylesheet. -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Poppins:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Poppins:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@700&family=Poppins:wght@400;500;600;700&display=swap" /></noscript>
     <title>SpendSmart · Know where every coin goes</title>
   </head>
   <body>
+    <noscript>
+      <p style="font-family: sans-serif; padding: 24px; color: #3B2F12;">SpendSmart needs JavaScript to run. Please turn it on in your browser settings and reload the page.</p>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

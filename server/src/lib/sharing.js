@@ -13,7 +13,8 @@ import { leaveGroupPlans } from './plans.js';
 
 export const INVITES_PER_DAY = 20;
 export const INVITE_SENT = "If this person has a SpendSmart account, they'll get an invitation.";
-export const GROUP_INVITES_SENT = "Group created. Everyone on the list who has a SpendSmart account will get an invitation.";
+export const GROUP_INVITES_SENT =
+  'Group created. Everyone on the list who has a SpendSmart account will get an invitation.';
 
 export const who = (p) => p?.full_name || p?.email || 'Someone';
 export const normEmail = (e) => String(e).trim().toLowerCase();
@@ -30,14 +31,19 @@ export async function areContacts(a, b, ex) {
   const r = await one(
     `select count(*) as n from public.contacts
       where (owner_id = $1 and contact_id = $2) or (owner_id = $2 and contact_id = $1)`,
-    [a, b], ex
+    [a, b],
+    ex
   );
   return r.n === 2;
 }
 
 /** True when `userId` is an active (accepted) member of the group. */
 export async function isActiveMember(groupId, userId, ex) {
-  return !!(await one("select 1 from public.group_members where group_id = $1 and user_id = $2 and status = 'active'", [groupId, userId], ex));
+  return !!(await one(
+    "select 1 from public.group_members where group_id = $1 and user_id = $2 and status = 'active'",
+    [groupId, userId],
+    ex
+  ));
 }
 
 /**
@@ -49,13 +55,20 @@ export async function isActiveMember(groupId, userId, ex) {
 export async function checkInviteQuota(c, uid, n) {
   await query('select 1 from public.users where id = $1 for no key update', [uid], c);
   const { sent } = await one(
-    "select count(*) as sent from public.invite_sends where user_id = $1 and created_at > now() - interval '1 day'", [uid], c
+    "select count(*) as sent from public.invite_sends where user_id = $1 and created_at > now() - interval '1 day'",
+    [uid],
+    c
   );
   if (sent + n > INVITES_PER_DAY) {
     const left = Math.max(0, INVITES_PER_DAY - sent);
-    throw new HttpError(429, left
-      ? `You can send ${left} more invitation${left === 1 ? '' : 's'} today.`
-      : `You've sent ${INVITES_PER_DAY} invitations today — try again tomorrow.`, 'invite_limit', { left });
+    throw new HttpError(
+      429,
+      left
+        ? `You can send ${left} more invitation${left === 1 ? '' : 's'} today.`
+        : `You've sent ${INVITES_PER_DAY} invitations today — try again tomorrow.`,
+      'invite_limit',
+      { left }
+    );
   }
 }
 
@@ -67,11 +80,21 @@ export async function logInviteSend(c, uid, email, { hasAccount }) {
   let emailed = false;
   if (!hasAccount) {
     emailed = !(await one(
-      "select 1 from public.invite_sends where to_email = $1 and emailed and created_at > now() - interval '7 days' limit 1", [email], c
+      "select 1 from public.invite_sends where to_email = $1 and emailed and created_at > now() - interval '7 days' limit 1",
+      [email],
+      c
     ));
   }
-  await query('insert into public.invite_sends (user_id, to_email, emailed) values ($1, $2, $3)', [uid, email, emailed], c);
-  await query("delete from public.invite_sends where user_id = $1 and created_at < now() - interval '8 days'", [uid], c);
+  await query(
+    'insert into public.invite_sends (user_id, to_email, emailed) values ($1, $2, $3)',
+    [uid, email, emailed],
+    c
+  );
+  await query(
+    "delete from public.invite_sends where user_id = $1 and created_at < now() - interval '8 days'",
+    [uid],
+    c
+  );
   return emailed;
 }
 
@@ -81,7 +104,8 @@ export function cancelPairSplits(c, a, b) {
     `update public.split_requests set status = 'cancelled', responded_at = now()
       where status = 'pending' and group_id is null
         and ((from_user = $1 and to_user = $2) or (from_user = $2 and to_user = $1))`,
-    [a, b], c
+    [a, b],
+    c
   );
 }
 
@@ -90,7 +114,8 @@ export function cancelGroupSplits(c, groupId, userId = null) {
   return query(
     `update public.split_requests set status = 'cancelled', responded_at = now()
       where status = 'pending' and group_id = $1 and ($2::uuid is null or from_user = $2 or to_user = $2)`,
-    [groupId, userId], c
+    [groupId, userId],
+    c
   );
 }
 
@@ -107,7 +132,7 @@ export const contactInviteNote = (fromProfile, inviteId) => ({
   title: `${who(fromProfile)} wants to share expenses with you`,
   body: `${fromProfile.email} invited you as a contact on SpendSmart.`,
   data: { invite_id: inviteId },
-  dedupe_key: `invite:${inviteId}`
+  dedupe_key: `invite:${inviteId}`,
 });
 
 export const groupInviteNote = (fromProfile, group) => ({
@@ -115,7 +140,7 @@ export const groupInviteNote = (fromProfile, group) => ({
   title: `${who(fromProfile)} invited you to the group ${group.name}`,
   body: 'Join to split costs and share budgets with the group.',
   data: { group_id: group.id },
-  dedupe_key: `group-invite:${group.id}:${Date.now()}`
+  dedupe_key: `group-invite:${group.id}:${Date.now()}`,
 });
 
 /**
@@ -129,7 +154,8 @@ export async function claimInvites(c, userId, email) {
        from public.profiles p
       where i.to_user is null and i.to_email = $2 and i.status = 'pending' and p.id = i.from_user and i.from_user <> $1
       returning i.id, p.full_name, p.email`,
-    [userId, addr], c
+    [userId, addr],
+    c
   );
   for (const inv of contacts) await notify(userId, contactInviteNote(inv, inv.id), c);
 
@@ -142,14 +168,19 @@ export async function claimInvites(c, userId, email) {
      )
      select g.id, g.name, p.full_name, p.email
        from moved m join public.groups g on g.id = m.group_id left join public.profiles p on p.id = m.invited_by`,
-    [userId, addr], c
+    [userId, addr],
+    c
   );
   await query('delete from public.group_email_invites where email = $1', [addr], c);
   for (const g of groups) await notify(userId, groupInviteNote(g, g), c);
 }
 
-const appUrl = () => (process.env.APP_URL || (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0]).trim().replace(/\/$/, '');
-const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const appUrl = () =>
+  (process.env.APP_URL || (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0])
+    .trim()
+    .replace(/\/$/, '');
+const esc = (s) =>
+  String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
 /**
  * Emails an invitation to join SpendSmart. Called after the response has been sent (so the
@@ -178,7 +209,8 @@ If you don't know ${name}, you can ignore this email.`;
   </div>
 </body></html>`;
   setImmediate(() => {
-    sendMail({ to, subject: `${name} invited you to SpendSmart`, text, html })
-      .catch((err) => console.error(`[mail] Invitation email to ${to} failed: ${describeMailError(err)}`));
+    sendMail({ to, subject: `${name} invited you to SpendSmart`, text, html }).catch((err) =>
+      console.error(`[mail] Invitation email to ${to} failed: ${describeMailError(err)}`)
+    );
   });
 }

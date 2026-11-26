@@ -37,7 +37,8 @@ A personal finance web app for students: cards and cash in one place, budgets th
 7. [Where we stopped: project status](#-where-we-stopped-project-status)
 8. [Project structure](#-project-structure)
 9. [Getting started](#-getting-started)
-10. [API overview](#-api-overview)
+10. [Deployment](#-deployment)
+11. [API overview](#-api-overview)
 
 ---
 
@@ -412,14 +413,15 @@ cp client/.env.example client/.env
 
 | Variable | Required | Description |
 | --- | :---: | --- |
-| `DATABASE_URL` | ✅ | PostgreSQL connection string (Supabase → *Connect* → *Session pooler*). SSL is enabled automatically |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string (Supabase → *Connect* → *Transaction pooler*, port 6543; the Session pooler works too). SSL is enabled automatically |
 | `JWT_SECRET` | ✅ | Long random string used to sign session cookies |
 | `PORT` | | API port (default `4000`) |
 | `CLIENT_ORIGIN` | | Comma-separated origins allowed to call the API (the React app) |
 | `APP_URL` | | Public URL of the React app, used in password-reset links |
 | `GOOGLE_CLIENT_ID` | | Google OAuth client id; leave empty to hide the Google button |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | | SMTP settings for emails. If `SMTP_HOST` is empty, codes and links are printed in the server console |
-| `NODE_ENV`, `TRUST_PROXY` | | Production options: secure cookies, running behind a proxy |
+| `BREVO_API_KEY` | | Send emails through Brevo's HTTP API (takes priority over SMTP) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | | SMTP settings for emails (`SMTP_FROM` is also the Brevo sender). With neither Brevo nor `SMTP_HOST`, codes and links are printed in the server console |
+| `NODE_ENV`, `TRUST_PROXY`, `LOG_CLIENT_IP` | | Production options: secure cookies, proxy hops to trust, IP logging to check them |
 
 **Client (`client/.env`)**
 
@@ -442,6 +444,88 @@ Then open **http://localhost:5173** 🎉
 
 > [!TIP]
 > After signing up, click **"Load sample month"** on the dashboard to fill the account with demo data. To try shared expenses, create a second account in a private window and add each other by email.
+
+---
+
+## 🌍 Deployment
+
+```text
+Browser ──► Vercel (React build, client/)  ── /api/* rewrite ──►  Render (Express API, server/)  ──►  Supabase (Postgres)
+                                                                          └──►  Brevo (emails, HTTPS API)
+```
+
+- The browser only ever talks to the **Vercel** domain. `client/vercel.json` forwards `/api/*` to the Render API,
+  so the API is *same-origin* for the browser and the session cookie is first-party (`httpOnly`, `secure`,
+  `sameSite=lax`). The client keeps calling relative `/api/...` URLs (`VITE_API_URL` stays empty).
+- No Docker. The API doesn't need the client build; `client/dist` is only served by Express when it exists
+  (local `npm run build` + `npm start`).
+
+### 1. Database (Supabase)
+
+1. Supabase → **Connect** → copy the **Transaction pooler** string (port **6543**). SSL is turned on by the server.
+2. Run the migrations **by hand** from your machine (they never run on deploy), with that `DATABASE_URL` in `server/.env`:
+   ```bash
+   npm run db:migrate -w server
+   ```
+   Run this again whenever a new file appears in `supabase/migrations/`, before deploying the code that needs it.
+
+### 2. API (Render, free Web Service)
+
+1. Render → **New → Blueprint** → select this repository. Render reads [`render.yaml`](render.yaml):
+   build `npm install` at the repo root (npm workspaces), start `npm run start -w server`,
+   health check `GET /api/health` (answers `{ "ok": true }` without touching the database).
+2. Fill in the variables Render asks for (table below), then deploy.
+3. Note the service URL, e.g. `https://spendsmart-api.onrender.com`.
+
+> [!NOTE]
+> The free plan sleeps after ~15 minutes without traffic; the first request then takes ~30–60 s.
+> Background jobs (subscription renewals and reminders, clean-up of unconfirmed sign-ups) run **at every
+> start** and then every hour while awake, so renewals that came due while asleep are caught up on wake-up.
+
+### 3. Client (Vercel)
+
+1. **Put the real Render URL in [`client/vercel.json`](client/vercel.json)**: replace
+   `https://RENDER_URL.onrender.com` in the `/api/:path*` rewrite with your service URL from step 2. Commit it.
+2. Vercel → **Add New → Project** → import the repository → **Root Directory: `client`**
+   (framework Vite, build `npm run build`, output `dist`: these come from `vercel.json`).
+3. Leave `VITE_API_URL` unset (or empty). Deploy and note the URL, e.g. `https://spendsmart.vercel.app`.
+4. Back on Render, set `CLIENT_ORIGIN` and `APP_URL` to that Vercel URL and redeploy.
+5. Google sign-in (optional): add the Vercel URL to the OAuth client's **Authorized JavaScript origins**.
+
+### 4. Email (Brevo)
+
+1. Brevo → **Senders, domains & dedicated IPs** → add and verify the sender address (or domain) used in `SMTP_FROM`.
+2. Brevo → **SMTP & API → API keys** → generate a key → `BREVO_API_KEY` on Render.
+3. Test it locally with the same values in `server/.env`: `npm run email:test -w server -- you@example.com`.
+
+The HTTP API is used because Render's free plan may block outgoing SMTP ports. With `BREVO_API_KEY` empty, the
+SMTP settings are used instead (same templates).
+
+### Environment variables: where each one goes
+
+| Variable | Where | Required | Value |
+| --- | --- | :---: | --- |
+| `NODE_ENV` | Render | ✅ | `production` (set by `render.yaml`): secure cookies, trust proxy, strict CORS, no console codes |
+| `NODE_VERSION` | Render | ✅ | `22` (set by `render.yaml`; the server needs Node 22.9+) |
+| `DATABASE_URL` | Render | ✅ | Supabase Transaction pooler string (port 6543) |
+| `JWT_SECRET` | Render | ✅ | Long random string (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`) |
+| `CLIENT_ORIGIN` | Render | ✅ | Vercel URL(s), comma-separated, no trailing slash: the only origins CORS allows |
+| `APP_URL` | Render | ✅ | Vercel URL, used in password-reset links |
+| `BREVO_API_KEY` | Render | ✅* | Brevo API key (*or the SMTP variables below: one email option is required) |
+| `SMTP_FROM` | Render | ✅ | Sender, e.g. `SpendSmart <no-reply@yourdomain.com>` (verified in Brevo) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Render | | Only if you use SMTP instead of Brevo |
+| `GOOGLE_CLIENT_ID` | Render | | Google OAuth client id; empty hides the Google button (the client gets it from the API) |
+| `TRUST_PROXY` | Render | | Proxy hops to trust for the client IP, default `1` in production (see below) |
+| `LOG_CLIENT_IP` | Render | | `1` logs `req.ip` and `X-Forwarded-For` per `/api` request, to check `TRUST_PROXY`; remove afterwards |
+| `PORT` | Render | | Don't set it: Render provides it and the server listens on it |
+| `VITE_API_URL` | Vercel | | Leave empty: the client calls relative `/api` URLs through the rewrite |
+| Render service URL | `client/vercel.json` | ✅ | Replace `RENDER_URL` in the `/api/:path*` rewrite |
+
+> [!TIP]
+> **Checking the client IP for the rate limits.** Requests pass through Vercel *and* Render's load balancer,
+> and each one can add an address to `X-Forwarded-For`. Set `LOG_CLIENT_IP=1`, log in once and look at the Render
+> logs: `ip=` should be **your** public IP. If it shows a Vercel address instead (all users would share one rate
+> limit), set `TRUST_PROXY=2`. Then remove `LOG_CLIENT_IP`.
 
 ---
 

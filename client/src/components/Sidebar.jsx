@@ -4,7 +4,13 @@ import { NAV } from '../lib/icons.js';
 import { useApp } from '../context/AppContext.jsx';
 import { LogoMark, Mascot } from './ui.jsx';
 
-const TABS = [['dashboard', 'Home'], ['transactions', 'Activity'], ['add', 'Add'], ['budgets', 'Budgets'], ['shared', 'Shared']];
+const TABS = [
+  ['dashboard', 'Home'],
+  ['transactions', 'Activity'],
+  ['add', 'Add'],
+  ['budgets', 'Budgets'],
+  ['shared', 'Shared'],
+];
 const KEY = 'ss-nav-prev';
 
 export function activeKey(pathname) {
@@ -17,31 +23,52 @@ export default function Sidebar({ collapsed = false, onToggle }) {
   const { pathname } = useLocation();
   const { summary } = useApp();
   const active = activeKey(pathname);
-  const a = Math.max(0, NAV.findIndex((n) => n[0] === active));
+  const a = Math.max(
+    0,
+    NAV.findIndex((n) => n[0] === active)
+  );
   const [pill, setPill] = useState(() => {
-    try { const p = sessionStorage.getItem(KEY); return p !== null && !isNaN(+p) ? +p : a; } catch { return a; }
+    try {
+      const p = sessionStorage.getItem(KEY);
+      return p !== null && !isNaN(+p) ? +p : a;
+    } catch {
+      return a;
+    }
   });
   const [hover, setHover] = useState(-1);
 
   useEffect(() => {
-    try { sessionStorage.setItem(KEY, String(a)); } catch { /* ignore */ }
+    try {
+      sessionStorage.setItem(KEY, String(a));
+    } catch {
+      /* ignore */
+    }
     const t = setTimeout(() => setPill(a), 60);
     return () => clearTimeout(t);
   }, [a]);
 
   const b = summary?.budgets;
   const onTrack = !b || b.total === 0 || b.under === b.total;
-  const mascotLine = !b ? 'Loading your month…'
-    : b.total === 0 ? 'Add a budget to get friendly nudges'
-    : `${b.under} of ${b.total} budgets are under their limit`;
+  const mascotLine = !b
+    ? 'Loading your month…'
+    : b.total === 0
+      ? 'Add a budget to get friendly nudges'
+      : `${b.under} of ${b.total} budgets are under their limit`;
 
   return (
     <div className="side-root">
       <aside className="ss-side">
         {/* The logo toggles the icon rail; the Dashboard link below still goes home. */}
-        <button type="button" className="brand" onClick={onToggle} aria-controls="side-nav"
-          aria-expanded={!collapsed} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-          <LogoMark /><span className="brand-name">SpendSmart</span>
+        <button
+          type="button"
+          className="brand"
+          onClick={onToggle}
+          aria-controls="side-nav"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
+          <LogoMark />
+          <span className="brand-name">SpendSmart</span>
         </button>
 
         <nav aria-label="Main" className="side-nav" id="side-nav">
@@ -49,35 +76,81 @@ export default function Sidebar({ collapsed = false, onToggle }) {
           {NAV.map((n, i) => {
             const on = i === pill;
             return (
-              <Link key={n[0]} to={n[2]} aria-current={i === a ? 'page' : undefined} aria-label={collapsed ? n[1] : undefined}
-                onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(-1)}
+              <Link
+                key={n[0]}
+                to={n[2]}
+                aria-current={i === a ? 'page' : undefined}
+                aria-label={collapsed ? n[1] : undefined}
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(-1)}
                 className="side-link"
-                style={{ color: on ? '#3B2F12' : '#6B5A33', fontWeight: i === a ? 600 : 500, background: !on && hover === i ? '#FFFBEF' : 'transparent' }}>
-                <svg viewBox="0 0 24 24" className="side-ic" style={{ transform: hover === i ? 'translateY(-3px) rotate(-6deg)' : 'none' }} aria-hidden="true"><path d={n[3]} /></svg>
+                style={{
+                  color: on ? '#3B2F12' : '#6B5A33',
+                  fontWeight: i === a ? 600 : 500,
+                  background: !on && hover === i ? '#FFFBEF' : 'transparent',
+                }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  className="side-ic"
+                  style={{ transform: hover === i ? 'translateY(-3px) rotate(-6deg)' : 'none' }}
+                  aria-hidden="true"
+                >
+                  <path d={n[3]} />
+                </svg>
                 <span className="side-label">{n[1]}</span>
-                {collapsed && <span className="side-tip" aria-hidden="true">{n[1]}</span>}
+                {collapsed && (
+                  <span className="side-tip" aria-hidden="true">
+                    {n[1]}
+                  </span>
+                )}
               </Link>
             );
           })}
         </nav>
 
-        {!collapsed && <div className="side-mascot">
-          <div className="side-bubble">{onTrack ? "You're on track! 🙂" : 'Careful this week!'}</div>
-          <Mascot />
-          <span className="side-mascot-line">{mascotLine}</span>
-        </div>}
+        {!collapsed && (
+          <div className="side-mascot">
+            <div className="side-bubble">{onTrack ? "You're on track! 🙂" : 'Careful this week!'}</div>
+            <Mascot />
+            <span className="side-mascot-line">{mascotLine}</span>
+          </div>
+        )}
       </aside>
 
       <nav className="ss-tabs" aria-label="Main">
         {TABS.map(([k, short]) => {
           const n = NAV.find((x) => x[0] === k);
-          const on = k === active, add = k === 'add';
+          const on = k === active,
+            add = k === 'add';
           return (
-            <Link key={k} to={n[2]} aria-current={on ? 'page' : undefined} aria-label={n[1]} className="tab-link"
-              style={{ fontWeight: on ? 600 : 500, color: on || add ? '#3B2F12' : '#6B5A33', background: on && !add ? '#FDF3D2' : 'transparent', transform: add ? 'translateY(-14px)' : 'none' }}>
-              <span className="tab-dot" style={{ width: add ? 52 : 26, height: add ? 52 : 26, background: add ? 'linear-gradient(135deg,#FDEEB2,#FBE38E 50%,#F2D06B)' : 'transparent', boxShadow: add ? '0 10px 20px rgba(232,201,100,.45)' : 'none' }}>
-                <svg viewBox="0 0 24 24" className="tab-ic" aria-hidden="true"><path d={n[3]} /></svg>
-              </span>{short}
+            <Link
+              key={k}
+              to={n[2]}
+              aria-current={on ? 'page' : undefined}
+              aria-label={n[1]}
+              className="tab-link"
+              style={{
+                fontWeight: on ? 600 : 500,
+                color: on || add ? '#3B2F12' : '#6B5A33',
+                background: on && !add ? '#FDF3D2' : 'transparent',
+                transform: add ? 'translateY(-14px)' : 'none',
+              }}
+            >
+              <span
+                className="tab-dot"
+                style={{
+                  width: add ? 52 : 26,
+                  height: add ? 52 : 26,
+                  background: add ? 'linear-gradient(135deg,#FDEEB2,#FBE38E 50%,#F2D06B)' : 'transparent',
+                  boxShadow: add ? '0 10px 20px rgba(232,201,100,.45)' : 'none',
+                }}
+              >
+                <svg viewBox="0 0 24 24" className="tab-ic" aria-hidden="true">
+                  <path d={n[3]} />
+                </svg>
+              </span>
+              {short}
             </Link>
           );
         })}

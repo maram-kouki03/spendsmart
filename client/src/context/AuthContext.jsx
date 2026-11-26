@@ -4,8 +4,8 @@ import { api, setUnauthorizedHandler } from '../lib/api.js';
 const Ctx = createContext(null);
 
 /**
- * The signed-in user comes from GET /api/auth/me (the session is an httpOnly cookie the
- * browser sends automatically). `user` is null when logged out; `ready` turns true after the first check.
+ * The signed-in user comes from GET /api/auth/session (the session is an httpOnly cookie the
+ * browser sends automatically; signed out it answers { user: null }). `user` is null when logged out; `ready` turns true after the first check.
  */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -13,12 +13,12 @@ export function AuthProvider({ children }) {
 
   const refresh = useCallback(async () => {
     try {
-      const { user: u } = await api.get('/auth/me');
+      const { user: u } = await api.get('/auth/session');
       setUser(u);
       return u;
     } catch (e) {
-      // 401 = not signed in. Anything else (server down) also leaves us logged out, but we don't hang.
-      if (e.status !== 401) console.warn('Could not check the session:', e.message);
+      // Server down or unreachable: we're treated as logged out, but we don't hang.
+      console.warn('Could not check the session:', e.message);
       setUser(null);
       return null;
     } finally {
@@ -41,7 +41,8 @@ export function AuthProvider({ children }) {
 
   // Sign-up doesn't sign in: it returns { needsVerification, email, resendIn } and a code is emailed.
   const register = useCallback(
-    (full_name, email, password, confirmPassword, remember) => api.post('/auth/register', { full_name, email, password, confirmPassword, remember }),
+    (full_name, email, password, confirmPassword, remember) =>
+      api.post('/auth/register', { full_name, email, password, confirmPassword, remember }),
     []
   );
 
@@ -60,7 +61,11 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(async () => {
-    try { await api.post('/auth/logout'); } finally { setUser(null); }
+    try {
+      await api.post('/auth/logout');
+    } finally {
+      setUser(null);
+    }
   }, []);
 
   const value = useMemo(

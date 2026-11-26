@@ -1,7 +1,7 @@
 // The SpendSmart API already answers with short, human messages (see server/src/routes/auth.js),
 // so they are shown as they are. Only browser-level failures need translating.
 const RULES = [
-  [/failed to fetch|networkerror|load failed/i, "Can't reach the server — check your connection and try again."]
+  [/failed to fetch|networkerror|load failed/i, "Can't reach the server — check your connection and try again."],
 ];
 
 export function friendlyAuthError(error) {

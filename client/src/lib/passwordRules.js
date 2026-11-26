@@ -13,13 +13,62 @@ export const SYMBOL_EXAMPLES = '! @ # $ % & * ? -';
 
 /** Very common passwords and base words (compared case-insensitively, also with leading/trailing digits and symbols removed). */
 export const COMMON_PASSWORDS = [
-  'password', 'passw0rd', 'p@ssword', 'p@ssw0rd', 'password1', 'password123', 'motdepasse', 'mot2passe',
-  '12345678', '123456789', '1234567890', '87654321', '11111111', '00000000', '12341234', '11223344',
-  'qwerty', 'qwerty123', 'qwertyuiop', 'azerty', 'azerty123', 'azertyuiop', 'asdfghjk', 'zxcvbnm',
-  '1q2w3e4r', '1qaz2wsx', 'abc12345', 'abcd1234', 'aa123456', 'iloveyou', 'jetaime', 'soleil',
-  'letmein', 'welcome', 'bienvenue', 'admin', 'administrator', 'root', 'login', 'changeme',
-  'secret', 'master', 'dragon', 'monkey', 'football', 'baseball', 'sunshine', 'princess',
-  'shadow', 'superman', 'batman', 'trustno1', 'starwars', 'spendsmart', 'money', 'bonjour'
+  'password',
+  'passw0rd',
+  'p@ssword',
+  'p@ssw0rd',
+  'password1',
+  'password123',
+  'motdepasse',
+  'mot2passe',
+  '12345678',
+  '123456789',
+  '1234567890',
+  '87654321',
+  '11111111',
+  '00000000',
+  '12341234',
+  '11223344',
+  'qwerty',
+  'qwerty123',
+  'qwertyuiop',
+  'azerty',
+  'azerty123',
+  'azertyuiop',
+  'asdfghjk',
+  'zxcvbnm',
+  '1q2w3e4r',
+  '1qaz2wsx',
+  'abc12345',
+  'abcd1234',
+  'aa123456',
+  'iloveyou',
+  'jetaime',
+  'soleil',
+  'letmein',
+  'welcome',
+  'bienvenue',
+  'admin',
+  'administrator',
+  'root',
+  'login',
+  'changeme',
+  'secret',
+  'master',
+  'dragon',
+  'monkey',
+  'football',
+  'baseball',
+  'sunshine',
+  'princess',
+  'shadow',
+  'superman',
+  'batman',
+  'trustno1',
+  'starwars',
+  'spendsmart',
+  'money',
+  'bonjour',
 ];
 const COMMON = new Set(COMMON_PASSWORDS);
 
@@ -33,9 +82,15 @@ const byteLength = (s) => new TextEncoder().encode(s).length;
 /** The parts of the user's identity a password must not contain (3+ characters each), lower-cased. */
 function personalWords({ email, name } = {}) {
   const words = [];
-  const local = String(email || '').split('@')[0].trim().toLowerCase();
+  const local = String(email || '')
+    .split('@')[0]
+    .trim()
+    .toLowerCase();
   if (local.length >= 3) words.push(local);
-  const first = String(name || '').trim().split(/\s+/)[0].toLowerCase();
+  const first = String(name || '')
+    .trim()
+    .split(/\s+/)[0]
+    .toLowerCase();
   if (first.length >= 3) words.push(first);
   return words;
 }
@@ -57,20 +112,55 @@ export function checkPassword(pw, ctx = {}) {
   const words = personalWords(ctx);
   const low = p.toLowerCase();
   const rules = [
-    { id: 'length', label: `${PASSWORD_MIN}–${PASSWORD_MAX_BYTES} characters`, ok: p.length >= PASSWORD_MIN && byteLength(p) <= PASSWORD_MAX_BYTES,
-      message: p.length < PASSWORD_MIN ? `Use at least ${PASSWORD_MIN} characters for your password.` : `Use at most ${PASSWORD_MAX_BYTES} characters for your password.` },
-    { id: 'upper', label: 'An uppercase letter', ok: UPPER.test(p), message: 'Add an uppercase letter (A–Z) to your password.' },
-    { id: 'lower', label: 'A lowercase letter', ok: LOWER.test(p), message: 'Add a lowercase letter (a–z) to your password.' },
+    {
+      id: 'length',
+      label: `${PASSWORD_MIN}–${PASSWORD_MAX_BYTES} characters`,
+      ok: p.length >= PASSWORD_MIN && byteLength(p) <= PASSWORD_MAX_BYTES,
+      message:
+        p.length < PASSWORD_MIN
+          ? `Use at least ${PASSWORD_MIN} characters for your password.`
+          : `Use at most ${PASSWORD_MAX_BYTES} characters for your password.`,
+    },
+    {
+      id: 'upper',
+      label: 'An uppercase letter',
+      ok: UPPER.test(p),
+      message: 'Add an uppercase letter (A–Z) to your password.',
+    },
+    {
+      id: 'lower',
+      label: 'A lowercase letter',
+      ok: LOWER.test(p),
+      message: 'Add a lowercase letter (a–z) to your password.',
+    },
     { id: 'number', label: 'A number', ok: DIGIT.test(p), message: 'Add a number (0–9) to your password.' },
-    { id: 'symbol', label: `A symbol (${SYMBOL_EXAMPLES})`, ok: SYMBOL.test(p), message: `Add a symbol to your password, like ${SYMBOL_EXAMPLES}` },
-    { id: 'spaces', label: 'No spaces at the start or end', ok: !empty && p === p.trim(), message: 'Remove the spaces at the start or end of your password.' }
+    {
+      id: 'symbol',
+      label: `A symbol (${SYMBOL_EXAMPLES})`,
+      ok: SYMBOL.test(p),
+      message: `Add a symbol to your password, like ${SYMBOL_EXAMPLES}`,
+    },
+    {
+      id: 'spaces',
+      label: 'No spaces at the start or end',
+      ok: !empty && p === p.trim(),
+      message: 'Remove the spaces at the start or end of your password.',
+    },
   ];
   if (words.length) {
-    rules.push({ id: 'personal', label: 'Not your name or email', ok: !empty && !words.some((w) => low.includes(w)),
-      message: "Don't use your name or email address in your password." });
+    rules.push({
+      id: 'personal',
+      label: 'Not your name or email',
+      ok: !empty && !words.some((w) => low.includes(w)),
+      message: "Don't use your name or email address in your password.",
+    });
   }
-  rules.push({ id: 'common', label: 'Not a common password', ok: !empty && !isCommon(p),
-    message: 'That password is too common — pick something harder to guess.' });
+  rules.push({
+    id: 'common',
+    label: 'Not a common password',
+    ok: !empty && !isCommon(p),
+    message: 'That password is too common — pick something harder to guess.',
+  });
 
   const failing = rules.find((r) => !r.ok);
   const ok = !failing;
@@ -95,7 +185,8 @@ function strengthOf(p, rules, ok) {
 export function newPasswordProblem(pw, confirm, ctx = {}) {
   const r = checkPassword(pw, ctx);
   if (!r.ok) return { code: 'weak_password', message: r.problem };
-  if (typeof confirm !== 'string' || confirm.length === 0) return { code: 'password_mismatch', message: 'Confirm your password.' };
+  if (typeof confirm !== 'string' || confirm.length === 0)
+    return { code: 'password_mismatch', message: 'Confirm your password.' };
   if (confirm !== pw) return { code: 'password_mismatch', message: "Passwords don't match." };
   return null;
 }

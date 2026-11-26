@@ -20,17 +20,30 @@ if (!SECRET) {
   console.warn('JWT_SECRET is not set: using a temporary secret, so everyone is logged out when the server restarts.');
 }
 
+/*
+ * In production the browser talks to Vercel, which forwards /api to Render, so the cookie is first-party
+ * (same origin as the app) and sameSite 'lax' is enough. `secure` is on in production (HTTPS only).
+ * It's off in development, because http://localhost would never send a secure cookie back.
+ */
 const cookieBase = { httpOnly: true, sameSite: 'lax', secure: PROD, path: '/' };
 
 /**
  * A short fingerprint of the password hash goes into the token, so changing or resetting the
  * password invalidates every other session without needing a sessions table.
  */
-const fingerprint = (hash) => crypto.createHash('sha256').update(hash || 'no-password').digest('base64url').slice(0, 16);
+const fingerprint = (hash) =>
+  crypto
+    .createHash('sha256')
+    .update(hash || 'no-password')
+    .digest('base64url')
+    .slice(0, 16);
 
 /** Signs a 7-day JWT and sets it as an httpOnly cookie: a session cookie, or 30 days with "remember me". */
 export function issueSession(res, user, remember) {
-  const token = jwt.sign({ sub: user.id, rem: remember ? 1 : 0, pf: fingerprint(user.password_hash) }, SECRET, { expiresIn: JWT_TTL, algorithm: 'HS256' });
+  const token = jwt.sign({ sub: user.id, rem: remember ? 1 : 0, pf: fingerprint(user.password_hash) }, SECRET, {
+    expiresIn: JWT_TTL,
+    algorithm: 'HS256',
+  });
   res.cookie(COOKIE, token, remember ? { ...cookieBase, maxAge: REMEMBER_MS } : cookieBase);
 }
 
@@ -46,7 +59,7 @@ export function publicUser(u, profile) {
     full_name: profile?.full_name ?? u.full_name ?? '',
     google: !!u.google_id,
     email_verified: !!u.email_verified_at,
-    created_at: u.created_at
+    created_at: u.created_at,
   };
 }
 
@@ -61,40 +74,58 @@ async function loadUser(id) {
   );
 }
 
-/** Reads the session cookie, verifies the JWT and loads req.user and req.profile from the database. */
+/**
+ * The session behind this request, or null. The cookie holds a JWT (user id, "remember me" flag and
+ * a fingerprint of the password hash); it is valid only while the signature checks out, the user
+ * still exists and the password hasn't changed since. An invalid cookie is cleared.
+ */
+export async function loadSession(req, res) {
+  const token = req.cookies?.[COOKIE];
+  if (!token) return null;
+
+  let payload;
+  try {
+    payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
+  } catch {
+    clearSession(res);
+    return null;
+  }
+
+  const row = await loadUser(payload.sub);
+  if (!row || payload.pf !== fingerprint(row.password_hash)) {
+    clearSession(res);
+    return null;
+  }
+
+  let profile = row.profile;
+  if (!profile) {
+    // Shouldn't happen (register creates both), but recover rather than lock the user out.
+    profile = await tx(async (c) => {
+      const p = await one(
+        'insert into public.profiles (id, full_name, email) values ($1, $2, $3) on conflict (id) do nothing returning *',
+        [row.id, row.full_name, row.email],
+        c
+      );
+      if (p) await createStarterSources(row.id, c);
+      return p || one('select * from public.profiles where id = $1', [row.id], c);
+    });
+  }
+
+  // Sliding renewal: the JWT lasts 7 days from the last day you used the app.
+  if (Date.now() / 1000 - payload.iat > RENEW_AFTER_S) issueSession(res, row, !!payload.rem);
+  return { payload, row, profile };
+}
+
+/** Express middleware: 401 without a valid session, otherwise sets req.auth, req.user and req.profile. */
 export async function requireAuth(req, res, next) {
   try {
-    const token = req.cookies?.[COOKIE];
-    if (!token) return res.status(401).json({ error: 'Not signed in' });
-
-    let payload;
-    try {
-      payload = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
-    } catch {
-      clearSession(res);
-      return res.status(401).json({ error: 'Session expired — please log in again' });
+    const session = await loadSession(req, res);
+    if (!session) {
+      return res
+        .status(401)
+        .json({ error: req.cookies?.[COOKIE] ? 'Session expired — please log in again' : 'Not signed in' });
     }
-
-    const row = await loadUser(payload.sub);
-    if (!row || payload.pf !== fingerprint(row.password_hash)) {
-      clearSession(res);
-      return res.status(401).json({ error: 'Session expired — please log in again' });
-    }
-
-    let profile = row.profile;
-    if (!profile) {
-      // Shouldn't happen (register creates both), but recover rather than lock the user out.
-      profile = await tx(async (c) => {
-        const p = await one('insert into public.profiles (id, full_name, email) values ($1, $2, $3) on conflict (id) do nothing returning *',
-          [row.id, row.full_name, row.email], c);
-        if (p) await createStarterSources(row.id, c);
-        return p || one('select * from public.profiles where id = $1', [row.id], c);
-      });
-    }
-
-    // Sliding renewal: the JWT lasts 7 days from the last day you used the app.
-    if (Date.now() / 1000 - payload.iat > RENEW_AFTER_S) issueSession(res, row, !!payload.rem);
-
+    const { payload, row, profile } = session;
     req.auth = payload;
     req.user = publicUser(row, profile);
     req.profile = profile;

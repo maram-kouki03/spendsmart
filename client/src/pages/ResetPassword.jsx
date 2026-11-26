@@ -46,30 +46,72 @@ export default function ResetPassword() {
   const noToken = !token;
 
   return (
-    <div className="ss pg-login" style={{ alignItems: 'center', justifyContent: 'center' }}>
-      <form className="card enter" onSubmit={submit} style={{ width: '100%', maxWidth: 440, padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <Link to="/" className="brand" style={{ padding: 0 }}><LogoMark /><span>SpendSmart</span></Link>
-        <h1 className="login-h1" style={{ fontSize: 28 }}>Choose a new password</h1>
+    <main className="ss pg-login" style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <form
+        className="card enter"
+        onSubmit={submit}
+        style={{ width: '100%', maxWidth: 440, padding: 28, display: 'flex', flexDirection: 'column', gap: 16 }}
+      >
+        <Link to="/" className="brand" style={{ padding: 0 }}>
+          <LogoMark />
+          <span>SpendSmart</span>
+        </Link>
+        <h1 className="login-h1" style={{ fontSize: 28 }}>
+          Choose a new password
+        </h1>
         {noToken && (
           <ErrorNote>
             This reset link is incomplete. <Link to="/login">Request a new one</Link> from the log-in page.
           </ErrorNote>
         )}
         <div>
-          <label className="lbl" htmlFor="np">New password</label>
-          <PasswordInput id="np" value={pw} onChange={setPw} disabled={noToken || done} placeholder="At least 8 characters" describedBy="np-help" />
+          <label className="lbl" htmlFor="np">
+            New password
+          </label>
+          <PasswordInput
+            id="np"
+            value={pw}
+            onChange={setPw}
+            disabled={noToken || done}
+            placeholder="At least 8 characters"
+            describedBy="np-help"
+          />
           <PasswordChecklist result={pwCheck} id="np-help" />
         </div>
         <div>
-          <label className="lbl" htmlFor="np2">Confirm password</label>
-          <PasswordInput id="np2" value={pw2} onChange={setPw2} disabled={noToken || done} placeholder="Type it again" describedBy="np2-match" showLabel="confirm password" />
+          <label className="lbl" htmlFor="np2">
+            Confirm password
+          </label>
+          <PasswordInput
+            id="np2"
+            value={pw2}
+            onChange={setPw2}
+            disabled={noToken || done}
+            placeholder="Type it again"
+            describedBy="np2-match"
+            showLabel="confirm password"
+          />
           <MatchNote pw={pw} confirm={pw2} id="np2-match" />
         </div>
         <ErrorNote>{err}</ErrorNote>
-        {/expired|invalid/i.test(err) && <Link to="/login" style={{ fontSize: 14, fontWeight: 600 }}>Back to log in →</Link>}
-        {done && <div className="note-ok" role="status">Password updated! Taking you to your dashboard…</div>}
-        <button className="btn full" disabled={busy || noToken || done} aria-disabled={!ready && !busy ? 'true' : undefined}>{busy ? <span className="spin" /> : 'Save password'}</button>
+        {/expired|invalid/i.test(err) && (
+          <Link to="/login" style={{ fontSize: 14, fontWeight: 600 }}>
+            Back to log in →
+          </Link>
+        )}
+        {done && (
+          <div className="note-ok" role="status">
+            Password updated! Taking you to your dashboard…
+          </div>
+        )}
+        <button
+          className="btn full"
+          disabled={busy || noToken || done}
+          aria-disabled={!ready && !busy ? 'true' : undefined}
+        >
+          {busy ? <span className="spin" /> : 'Save password'}
+        </button>
       </form>
-    </div>
+    </main>
   );
 }
