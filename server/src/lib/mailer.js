@@ -1,11 +1,14 @@
 /**
  * Email transports, picked in this order:
- *   1. Brevo's HTTP API when BREVO_API_KEY is set (HTTPS on port 443, which works on hosts such as
- *      Render's free plan that block outgoing SMTP ports). Sender: SMTP_FROM.
- *   2. SMTP (nodemailer) when SMTP_HOST is set:
- *        SMTP_HOST, SMTP_PORT (465 = TLS, 587 = STARTTLS), SMTP_USER, SMTP_PASS, SMTP_FROM
- *   3. Neither: messages are printed in the server console — enough for local development (copy the
+ *   1. Mailjet's HTTP API when MAILJET_API_KEY and MAILJET_SECRET_KEY are both set (HTTPS on port
+ *      443, which works on hosts such as Render's free plan that block outgoing SMTP ports).
+ *   2. Brevo's HTTP API when BREVO_API_KEY is set (also HTTPS).
+ *   3. SMTP (nodemailer) when SMTP_HOST is set — e.g. Gmail for local development:
+ *        SMTP_HOST, SMTP_PORT (465 = TLS, 587 = STARTTLS), SMTP_USER, SMTP_PASS
+ *   4. None: messages are printed in the server console — enough for local development (copy the
  *      code / reset link from there).
+ * SMTP_FROM ("Name <address>") is the sender for all of them; for Mailjet and Brevo it must be a
+ * sender verified in that service.
  * The same subject, text and HTML are sent whichever transport is used.
  *
  * The environment is read when the first email is sent (not at import time), and `--env-file`
@@ -37,15 +40,76 @@ export function mailConfig() {
   return { host, port, secure: port === 465, user, pass, from, fromNote };
 }
 
+export const mailjetEnabled = () =>
+  Boolean(clean(process.env.MAILJET_API_KEY) && clean(process.env.MAILJET_SECRET_KEY));
 export const brevoEnabled = () => Boolean(clean(process.env.BREVO_API_KEY));
 export const smtpEnabled = () => Boolean(clean(process.env.SMTP_HOST));
-export const mailEnabled = () => brevoEnabled() || smtpEnabled();
-/** 'brevo', 'smtp' or 'console' (for logs and the email test script). */
-export const mailTransportName = () => (brevoEnabled() ? 'brevo' : smtpEnabled() ? 'smtp' : 'console');
+export const mailEnabled = () => mailjetEnabled() || brevoEnabled() || smtpEnabled();
+/** 'mailjet', 'brevo', 'smtp' or 'console' (for logs and the email test script). */
+export const mailTransportName = () =>
+  mailjetEnabled() ? 'mailjet' : brevoEnabled() ? 'brevo' : smtpEnabled() ? 'smtp' : 'console';
+
+const MAILJET_URL = 'https://api.mailjet.com/v3.1/send';
+export const MAILJET_TIMEOUT_MS = 10000;
+
+/** Mailjet's error text, from either shape it uses: a top-level error, or errors per message. */
+function mailjetErrorText(body) {
+  const msgErrors = (body?.Messages || []).flatMap((m) => m.Errors || []);
+  const parts = msgErrors.length
+    ? msgErrors.map((e) => [e.ErrorCode, e.ErrorMessage].filter(Boolean).join(': '))
+    : [body?.ErrorMessage || body?.ErrorInfo].filter(Boolean);
+  return parts.join(' | ');
+}
+
+/**
+ * One email through Mailjet's Send API v3.1: POST /v3.1/send with Basic auth (API key : secret key),
+ * at most MAILJET_TIMEOUT_MS. A failure becomes an Error with code 'EMAILJET' (or 'ETIMEDOUT'), the
+ * HTTP status in `responseCode` and Mailjet's message in `response`, so describeMailError and
+ * explainMailError work as for SMTP. The keys are never put in an error or a log line.
+ */
+export async function sendViaMailjet({ from, to, subject, text, html }, timeoutMs = MAILJET_TIMEOUT_MS) {
+  const sender = parseAddress(from);
+  const auth = Buffer.from(`${clean(process.env.MAILJET_API_KEY)}:${clean(process.env.MAILJET_SECRET_KEY)}`).toString(
+    'base64'
+  );
+  let res;
+  try {
+    res = await fetch(MAILJET_URL, {
+      method: 'POST',
+      headers: { authorization: `Basic ${auth}`, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        Messages: [
+          {
+            From: { Email: sender.email, Name: sender.name || 'SpendSmart' },
+            To: [{ Email: to }],
+            Subject: subject,
+            TextPart: text,
+            HTMLPart: html,
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    const timeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    throw Object.assign(new Error(timeout ? `Mailjet did not answer within ${timeoutMs / 1000} s` : e.message), {
+      code: timeout ? 'ETIMEDOUT' : 'EMAILJET',
+    });
+  }
+  const body = await res.json().catch(() => ({}));
+  // Success is a 200 whose message has Status "success"; anything else is an error.
+  const status = body?.Messages?.[0]?.Status;
+  if (res.ok && (!status || status === 'success')) return body;
+  throw Object.assign(new Error(`Mailjet answered ${res.status}`), {
+    code: 'EMAILJET',
+    responseCode: res.status,
+    response: mailjetErrorText(body) || res.statusText || `status ${status}`,
+  });
+}
 
 const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
 
-/** 'Name <a@b.c>' or 'a@b.c' → { name?, email } (Brevo wants the sender split up). */
+/** 'Name <a@b.c>' or 'a@b.c' → { name?, email } (Mailjet and Brevo want the sender split up). */
 export function parseAddress(v) {
   const m = String(v || '').match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
   if (m) return m[1] ? { name: m[1].replace(/^(["'])(.*)\1$/, '$2'), email: m[2].trim() } : { email: m[2].trim() };
@@ -128,6 +192,15 @@ export function explainMailError(err) {
   const code = err?.code || '';
   const rc = err?.responseCode;
   const msg = String(err?.response || err?.message || '');
+  if (code === 'EMAILJET') {
+    if (rc === 401)
+      return 'Mailjet rejected the keys — check MAILJET_API_KEY and MAILJET_SECRET_KEY (Mailjet → Account settings → API keys).';
+    if (/sender|from/i.test(msg))
+      return 'Mailjet refused the sender — SMTP_FROM must be a sender address (or domain) validated in Mailjet → Senders & domains.';
+    if (rc === 403) return 'Mailjet refused the request — the account may be suspended or not activated yet.';
+    if (rc === 429) return 'Mailjet rate limit or quota reached — try again later.';
+    return 'Mailjet could not send the email — see the status and message above.';
+  }
   if (code === 'EBREVO') {
     if (rc === 401) return 'Brevo rejected the API key — check BREVO_API_KEY (Brevo → SMTP & API → API keys).';
     if (rc === 400 && /sender/i.test(msg))
@@ -148,6 +221,8 @@ export function explainMailError(err) {
       'created for that same account at https://myaccount.google.com/apppasswords.'
     );
   }
+  if (code === 'ETIMEDOUT' && /Mailjet|Brevo/.test(msg))
+    return 'The email API did not answer in time (a slow or unreachable service). The user can try again; check the service status if it keeps happening.';
   if (code === 'ETIMEDOUT' || (code === 'ESOCKET' && /timeout/i.test(msg))) {
     return 'Connection timed out — the network or a firewall/antivirus is probably blocking this port. Try SMTP_PORT=587 (or 465).';
   }
@@ -173,6 +248,10 @@ export const describeMailError = (err) =>
   [err?.code, err?.responseCode, (err?.response || err?.message || '').split('\n')[0]].filter(Boolean).join(' · ');
 
 export async function sendMail({ to, subject, text, html }) {
+  if (mailjetEnabled()) {
+    await sendViaMailjet({ from: mailConfig().from, to, subject, text, html });
+    return;
+  }
   if (brevoEnabled()) {
     await sendViaBrevo({ from: mailConfig().from, to, subject, text, html }, SEND_DEADLINE_MS);
     return;
@@ -206,13 +285,15 @@ const esc = (s) =>
 
 /**
  * Sends the 6-digit email-confirmation code; throws if email is configured but sending fails (the
- * caller then rolls the code back, so it is never printed). Without Brevo or SMTP the code is printed in
+ * caller then rolls the code back, so it is never printed). Without an email service the code is printed in
  * the console for development — never when NODE_ENV=production, where that's an error instead.
  */
 export async function sendVerificationCode({ to, name, code, minutes = 15 }) {
   if (!mailEnabled()) {
     if (process.env.NODE_ENV === 'production')
-      throw new Error('Email is not configured (set BREVO_API_KEY, or SMTP_HOST and the other SMTP_* variables)');
+      throw new Error(
+        'Email is not configured (set MAILJET_API_KEY + MAILJET_SECRET_KEY, BREVO_API_KEY, or the SMTP_* variables)'
+      );
     console.log(`\n[DEV] Verification code for ${to}: ${code}\n`);
     return;
   }

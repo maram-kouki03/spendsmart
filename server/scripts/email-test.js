@@ -1,5 +1,5 @@
 /**
- * Checks the email settings in server/.env. With BREVO_API_KEY: sends one test email through Brevo's
+ * Checks the email settings in server/.env. With Mailjet or Brevo keys: sends one test email through its
  * HTTP API. With SMTP: connects + logs in (transporter.verify()), then sends a test email to
  * SMTP_USER. Never prints the password, the API key or other secrets.
  *
@@ -13,7 +13,9 @@ import {
   explainMailError,
   mailConfig,
   mailEnabled,
+  mailjetEnabled,
   sendViaBrevo,
+  sendViaMailjet,
 } from '../src/lib/mailer.js';
 
 const mask = (v) => (v ? `${v.slice(0, 2)}***${v.includes('@') ? v.slice(v.indexOf('@')) : ''}` : '(empty)');
@@ -26,21 +28,26 @@ const TEST = {
 
 async function main() {
   if (!mailEnabled()) {
-    console.log('BREVO_API_KEY and SMTP_HOST are empty → emails are printed in the server console instead of being sent. Nothing to test.');
+    console.log('No email service is configured (Mailjet, Brevo or SMTP_HOST) → emails are printed in the server console instead of being sent. Nothing to test.');
     return;
   }
   const cfg = mailConfig();
-  if (brevoEnabled()) {
-    // Brevo HTTP API: there is no login step, so the test is one send. Needs a recipient.
+  // HTTP APIs (Mailjet, Brevo): there is no login step, so the test is one send. Needs a recipient.
+  const api = mailjetEnabled()
+    ? { name: 'Mailjet', keys: ['MAILJET_API_KEY', 'MAILJET_SECRET_KEY'], send: sendViaMailjet }
+    : brevoEnabled()
+      ? { name: 'Brevo', keys: ['BREVO_API_KEY'], send: sendViaBrevo }
+      : null;
+  if (api) {
     const to = process.argv[2] || cfg.user || (cfg.from.match(/<([^>]+)>/) || [])[1] || cfg.from;
-    console.log('Brevo HTTP API (BREVO_API_KEY is set, SMTP settings are ignored)');
-    console.log(`  key     ${String(process.env.BREVO_API_KEY).trim().length} characters`);
-    console.log(`  from    ${cfg.from.replace(/<([^>]+)>/, (_, a) => `<${mask(a)}>`)}`);
+    console.log(`${api.name} HTTP API (SMTP settings are ignored)`);
+    for (const k of api.keys) console.log(`  ${k.padEnd(19)} ${String(process.env[k]).trim().length} characters`);
+    console.log(`  from                ${cfg.from.replace(/<([^>]+)>/, (_, a) => `<${mask(a)}>`)}`);
     process.stdout.write(`\nSending a test email to ${mask(to)} … `);
     try {
-      await sendViaBrevo({ from: cfg.from, to, ...TEST });
+      await api.send({ from: cfg.from, to, ...TEST });
       console.log('OK');
-      console.log(`\n✅ Brevo accepted the email. Check the inbox (and spam) of ${mask(to)}.`);
+      console.log(`\n✅ ${api.name} accepted the email. Check the inbox (and spam) of ${mask(to)}.`);
     } catch (e) {
       fail(e);
     }

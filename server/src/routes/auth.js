@@ -8,7 +8,7 @@ import { ah, HttpError } from '../lib/util.js';
 import { createStarterSources } from '../lib/finance.js';
 import { claimInvites } from '../lib/sharing.js';
 import { newPasswordProblem } from '../lib/passwordRules.js';
-import { sendMail, sendVerificationCode } from '../lib/mailer.js';
+import { describeMailError, sendMail, sendVerificationCode } from '../lib/mailer.js';
 import { requireAuth, loadSession, issueSession, clearSession, publicUser } from '../auth.js';
 
 /*
@@ -486,7 +486,7 @@ r.post(
         subject: 'Reset your SpendSmart password',
         text: `Someone (hopefully you) asked to reset your SpendSmart password.\n\nChoose a new one here (the link works for 1 hour):\n${link}\n\nIf it wasn't you, you can ignore this email.`,
         html: `<p>Someone (hopefully you) asked to reset your SpendSmart password.</p><p><a href="${link}">Choose a new password</a> — the link works for 1 hour.</p><p>If it wasn't you, you can ignore this email.</p>`,
-      }).catch((e) => console.error('Reset email failed:', e.message));
+      }).catch((e) => console.error(`[mail] Reset email to ${user.email} failed: ${describeMailError(e)}`));
     }
     res.json({ ok: true });
   })

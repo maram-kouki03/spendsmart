@@ -66,7 +66,7 @@ const show = (r) => `HTTP ${r.status} ${typeof r.data === 'string' ? r.data.slic
 async function startServer() {
   const child = spawn(process.execPath, ['--env-file-if-exists=.env', 'src/index.js'], {
     // SMTP off: invitation emails to the test addresses are printed in the server log, never sent.
-    cwd: SERVER_DIR, env: { ...process.env, PORT: String(PORT), SMTP_HOST: '', BREVO_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe']
+    cwd: SERVER_DIR, env: { ...process.env, PORT: String(PORT), SMTP_HOST: '', BREVO_API_KEY: '', MAILJET_API_KEY: '', MAILJET_SECRET_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe']
   });
   let log = '';
   child.stdout.on('data', (d) => { log += d; });

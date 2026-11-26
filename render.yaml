@@ -30,10 +30,15 @@ services:
       # The public URL of the React app, used in password-reset links (the Vercel URL).
       - key: APP_URL
         sync: false
-      # Email: set BREVO_API_KEY (recommended: HTTPS API, the free plan may block SMTP ports)…
+      # Email: the free plan blocks SMTP ports, so use an HTTPS API. Mailjet (both keys) comes first…
+      - key: MAILJET_API_KEY
+        sync: false
+      - key: MAILJET_SECRET_KEY
+        sync: false
+      # …or Brevo…
       - key: BREVO_API_KEY
         sync: false
-      # …or SMTP instead (leave BREVO_API_KEY empty).
+      # …or SMTP (only where outgoing SMTP ports are open).
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
@@ -42,7 +47,7 @@ services:
         sync: false
       - key: SMTP_PASS
         sync: false
-      # Sender for both transports, e.g. "SpendSmart <no-reply@yourdomain.com>" (verified in Brevo).
+      # Sender for every transport, e.g. "SpendSmart <no-reply@yourdomain.com>" (validated in Mailjet/Brevo).
       - key: SMTP_FROM
         sync: false
       # Optional: Google sign-in. Leave empty to hide the Google button.

@@ -419,8 +419,9 @@ cp client/.env.example client/.env
 | `CLIENT_ORIGIN` | | Comma-separated origins allowed to call the API (the React app) |
 | `APP_URL` | | Public URL of the React app, used in password-reset links |
 | `GOOGLE_CLIENT_ID` | | Google OAuth client id; leave empty to hide the Google button |
-| `BREVO_API_KEY` | | Send emails through Brevo's HTTP API (takes priority over SMTP) |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | | SMTP settings for emails (`SMTP_FROM` is also the Brevo sender). With neither Brevo nor `SMTP_HOST`, codes and links are printed in the server console |
+| `MAILJET_API_KEY`, `MAILJET_SECRET_KEY` | | Send emails through Mailjet's HTTP API (first choice when both are set) |
+| `BREVO_API_KEY` | | Send emails through Brevo's HTTP API (used when Mailjet isn't set; takes priority over SMTP) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | | SMTP settings for emails, e.g. Gmail locally (`SMTP_FROM` is also the Mailjet/Brevo sender). With no email service set, codes and links are printed in the server console |
 | `NODE_ENV`, `TRUST_PROXY`, `LOG_CLIENT_IP` | | Production options: secure cookies, proxy hops to trust, IP logging to check them |
 
 **Client (`client/.env`)**
@@ -451,7 +452,7 @@ Then open **http://localhost:5173** 🎉
 
 ```text
 Browser ──► Vercel (React build, client/)  ── /api/* rewrite ──►  Render (Express API, server/)  ──►  Supabase (Postgres)
-                                                                          └──►  Brevo (emails, HTTPS API)
+                                                                          └──►  Mailjet or Brevo (emails, HTTPS API)
 ```
 
 - The browser only ever talks to the **Vercel** domain. `client/vercel.json` forwards `/api/*` to the Render API,
@@ -492,14 +493,25 @@ Browser ──► Vercel (React build, client/)  ── /api/* rewrite ──►
 4. Back on Render, set `CLIENT_ORIGIN` and `APP_URL` to that Vercel URL and redeploy.
 5. Google sign-in (optional): add the Vercel URL to the OAuth client's **Authorized JavaScript origins**.
 
-### 4. Email (Brevo)
+### 4. Email (Mailjet, or Brevo)
 
-1. Brevo → **Senders, domains & dedicated IPs** → add and verify the sender address (or domain) used in `SMTP_FROM`.
-2. Brevo → **SMTP & API → API keys** → generate a key → `BREVO_API_KEY` on Render.
+Render's free plan blocks outgoing SMTP ports, so production sends through an **HTTPS API**. The server picks the
+first one configured: **Mailjet** (both keys) → **Brevo** → **SMTP** → console. The templates are the same for all
+of them (confirmation code, password reset, invitations).
+
+**Mailjet (recommended)**
+1. Mailjet → **Senders & domains** → add and validate the sender address (or domain) used in `SMTP_FROM`.
+2. Mailjet → **Account settings → API keys** (REST API) → copy the API key and the secret key →
+   `MAILJET_API_KEY` and `MAILJET_SECRET_KEY` on Render.
 3. Test it locally with the same values in `server/.env`: `npm run email:test -w server -- you@example.com`.
 
-The HTTP API is used because Render's free plan may block outgoing SMTP ports. With `BREVO_API_KEY` empty, the
-SMTP settings are used instead (same templates).
+If sending fails, the Render logs show Mailjet's status and message (e.g. `[mail] Verification email to … failed:
+EMAILJET · 401 · …`), never the keys. The user sees "We couldn't send the confirmation email" (502).
+
+**Brevo (alternative):** verify the sender in Brevo → *Senders, domains & dedicated IPs*, then set `BREVO_API_KEY`
+(Brevo → *SMTP & API → API keys*). Leave the Mailjet keys empty.
+
+**Locally**, Gmail over SMTP keeps working: leave the Mailjet and Brevo keys empty in `server/.env`.
 
 ### Environment variables: where each one goes
 
@@ -511,9 +523,11 @@ SMTP settings are used instead (same templates).
 | `JWT_SECRET` | Render | ✅ | Long random string (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`) |
 | `CLIENT_ORIGIN` | Render | ✅ | Vercel URL(s), comma-separated, no trailing slash: the only origins CORS allows |
 | `APP_URL` | Render | ✅ | Vercel URL, used in password-reset links |
-| `BREVO_API_KEY` | Render | ✅* | Brevo API key (*or the SMTP variables below: one email option is required) |
-| `SMTP_FROM` | Render | ✅ | Sender, e.g. `SpendSmart <no-reply@yourdomain.com>` (verified in Brevo) |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Render | | Only if you use SMTP instead of Brevo |
+| `MAILJET_API_KEY` | Render | ✅* | Mailjet API key (*one email option is required: Mailjet, Brevo or SMTP) |
+| `MAILJET_SECRET_KEY` | Render | ✅* | Mailjet secret key (both Mailjet keys must be set) |
+| `BREVO_API_KEY` | Render | | Brevo API key, only if you use Brevo instead of Mailjet |
+| `SMTP_FROM` | Render | ✅ | Sender, e.g. `SpendSmart <no-reply@yourdomain.com>` (validated in Mailjet / Brevo) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Render | | SMTP only; blocked on Render's free plan, so use them locally (e.g. Gmail) |
 | `GOOGLE_CLIENT_ID` | Render | | Google OAuth client id; empty hides the Google button (the client gets it from the API) |
 | `TRUST_PROXY` | Render | | Proxy hops to trust for the client IP, default `1` in production (see below) |
 | `LOG_CLIENT_IP` | Render | | `1` logs `req.ip` and `X-Forwarded-For` per `/api` request, to check `TRUST_PROXY`; remove afterwards |
