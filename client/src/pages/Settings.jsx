@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { I } from '../lib/icons.js';
@@ -6,9 +6,7 @@ import { initials } from '../lib/format.js';
 import { useApp } from '../context/AppContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import Topbar from '../components/Topbar.jsx';
-import { checkPassword, newPasswordProblem } from '../lib/passwordRules.js';
 import { ErrorNote, Icon, Modal, Seg, Switch } from '../components/ui.jsx';
-import { MatchNote, PasswordChecklist } from '../components/PasswordChecklist.jsx';
 
 const NOTE = { TND: 'Amounts will show in Tunisian dinar (TND).', EUR: 'Amounts will show in euro (€).', USD: 'Amounts will show in US dollars ($).' };
 const TOGGLES = [['notify_budget', 'Budget alerts', 'When spending passes a budget’s alert threshold'], ['notify_split', 'Split requests', 'When someone asks you to share a cost'], ['notify_subs', 'Subscription reminders', '3 days before each renewal']];
@@ -19,26 +17,18 @@ export default function Settings() {
   const { user, logout: endSession } = useAuth();
   const nav = useNavigate();
   const [editing, setEditing] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [leaving, setLeaving] = useState(false);
 
   async function patch(body) {
     try { await api.patch('/me', body); await refresh(); }
     catch (e) { toast(e.message, 'err'); }
   }
 
-  async function exportCsv() {
-    setExporting(true);
-    try {
-      const res = await api.get('/export.csv', { raw: true });
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = Object.assign(document.createElement('a'), { href: url, download: `spendsmart-${new Date().toISOString().slice(0, 10)}.csv` });
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e) { toast(e.message, 'err'); } finally { setExporting(false); }
+  async function logout() {
+    setLeaving(true);
+    try { await endSession(); nav('/login', { replace: true }); }
+    catch (e) { setLeaving(false); toast(e.message || 'Could not log out', 'err'); }
   }
-
-  async function logout() { await endSession(); nav('/login', { replace: true }); }
 
   const name = profile?.full_name || '';
   return (
@@ -48,7 +38,10 @@ export default function Settings() {
         <section className="card sc" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
           <span className="gold profile-av">{initials(name, user?.email)}</span>
           <div style={{ flex: '1 1 200px' }}><div style={{ fontSize: 20, fontWeight: 700 }}>{name || 'Add your name'}</div><div style={{ fontSize: 14, color: '#6B5A33' }}>{user?.email}</div></div>
-          <button className="btn-o" onClick={() => setEditing(true)}><Icon d={I.edit} size={18} />Edit profile</button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn-o" onClick={() => setEditing(true)}><Icon d={I.edit} size={18} />Edit profile</button>
+            <button className="btn-o" style={{ color: '#B91C1C', borderColor: '#FECACA' }} onClick={logout} disabled={leaving}>{leaving ? <span className="spin" /> : <Icon d={I.logout} size={18} />}Log out</button>
+          </div>
         </section>
 
         <section className="card sc">
@@ -71,16 +64,6 @@ export default function Settings() {
             ))}
           </div>
         </section>
-
-        <PasswordSection />
-
-        <section className="card sc" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ flex: '1 1 240px' }}><div style={{ fontWeight: 600 }}>Your data</div><div style={{ fontSize: 13, color: '#6B5A33' }}>Download every transaction, budget and goal as a CSV file.</div></div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn-o" onClick={exportCsv} disabled={exporting}>{exporting ? <span className="spin" /> : <Icon d={I.download} size={18} />}Export my data</button>
-            <button className="btn-o" style={{ color: '#B91C1C', borderColor: '#FECACA' }} onClick={logout}><Icon d={I.logout} size={18} />Log out</button>
-          </div>
-        </section>
       </div>
 
       <Modal open={editing} onClose={() => setEditing(false)} title="Edit profile">
@@ -90,58 +73,10 @@ export default function Settings() {
   );
 }
 
-function PasswordSection() {
-  const { user, setUser } = useAuth();
-  const { toast } = useApp();
-  const hasPassword = !!user?.has_password;
-  const [cur, setCur] = useState('');
-  const [pw, setPw] = useState('');
-  const [pw2, setPw2] = useState('');
-  const [err, setErr] = useState('');
-  const [busy, setBusy] = useState(false);
-  const pwCheck = useMemo(() => checkPassword(pw, { email: user?.email, name: user?.full_name }), [pw, user?.email, user?.full_name]);
-  const ready = pwCheck.ok && pw === pw2 && (!hasPassword || !!cur);
-
-  async function submit(e) {
-    e.preventDefault();
-    setErr('');
-    if (hasPassword && !cur) return setErr('Enter your current password.');
-    const bad = newPasswordProblem(pw, pw2, { email: user?.email, name: user?.full_name });
-    if (bad) return setErr(bad.message);
-    setBusy(true);
-    try {
-      const res = await api.post('/auth/change-password', { current_password: cur, new_password: pw, confirm_password: pw2 });
-      if (res?.user) setUser(res.user);
-      setCur(''); setPw(''); setPw2('');
-      toast(hasPassword ? 'Password changed — other devices were signed out' : 'Password set — you can now log in with your email too');
-    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
-  }
-
-  return (
-    <section className="card sc">
-      <h2 className="h2">{hasPassword ? 'Change password' : 'Set a password'}</h2>
-      {!hasPassword && <span className="small-muted">You signed up with Google. Add a password to also log in with your email.</span>}
-      <form onSubmit={submit} style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
-        {/* Hidden username field helps password managers save the right account. */}
-        <input type="email" autoComplete="username" value={user?.email || ''} readOnly hidden />
-        {hasPassword && <label className="src-field" style={{ flex: '1 1 200px' }}>Current password<input className="inp" type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} style={{ height: 44 }} /></label>}
-        <label className="src-field" style={{ flex: '1 1 200px' }}>New password<input className="inp" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={pw} onChange={(e) => setPw(e.target.value)} style={{ height: 44 }} aria-describedby="set-pw-help" /></label>
-        <label className="src-field" style={{ flex: '1 1 200px' }}>Confirm new password<input className="inp" type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} style={{ height: 44 }} aria-describedby="set-pw-match" /></label>
-        <button className="btn" disabled={busy} aria-disabled={!ready && !busy ? 'true' : undefined} style={{ height: 44, padding: '0 18px' }}>{busy ? <span className="spin" /> : <><Icon d={I.check} size={18} />{hasPassword ? 'Update password' : 'Set password'}</>}</button>
-      </form>
-      <div>
-        <MatchNote pw={pw} confirm={pw2} id="set-pw-match" />
-        <PasswordChecklist result={pwCheck} id="set-pw-help" />
-      </div>
-      <ErrorNote>{err}</ErrorNote>
-    </section>
-  );
-}
-
 function ProfileForm({ initial, onSave }) {
   const [n, setN] = useState(initial);
   return (
-    <form onSubmit={(e) => { e.preventDefault(); if (n.trim()) onSave(n.trim()); }} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <form onSubmit={(e) => { e.preventDefault(); if (n.trim()) onSave(n.trim()); }} className="modal-body">
       <div><label className="lbl" htmlFor="fn">Full name</label><input className="inp" id="fn" autoComplete="name" value={n} onChange={(e) => setN(e.target.value)} /></div>
       <button className="btn full">Save</button>
     </form>

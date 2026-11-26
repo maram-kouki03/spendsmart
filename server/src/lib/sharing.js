@@ -9,6 +9,7 @@ import { many, one, query } from '../db.js';
 import { HttpError } from './util.js';
 import { notify } from './finance.js';
 import { sendMail, describeMailError } from './mailer.js';
+import { leaveGroupPlans } from './plans.js';
 
 export const INVITES_PER_DAY = 20;
 export const INVITE_SENT = "If this person has a SpendSmart account, they'll get an invitation.";
@@ -96,11 +97,8 @@ export function cancelGroupSplits(c, groupId, userId = null) {
 /** Inside `c`: takes `userId` out of a group (row, pending splits, and their opt-in on the group's shared budgets). */
 export async function removeFromGroup(c, groupId, userId) {
   await cancelGroupSplits(c, groupId, userId);
-  await query(
-    `delete from public.shared_budget_limits l using public.shared_budgets b
-      where l.shared_budget_id = b.id and b.group_id = $1 and l.user_id = $2`,
-    [groupId, userId], c
-  );
+  // Their savings in the group's plans go back to their own cards.
+  await leaveGroupPlans(c, groupId, userId);
   await query('delete from public.group_members where group_id = $1 and user_id = $2', [groupId, userId], c);
 }
 

@@ -12,25 +12,21 @@ export class ApiError extends Error {
   constructor(message, status, data = {}) { super(message); this.status = status; this.code = data.code; this.data = data; }
 }
 
-/** Every request gives up after this long (uploads get longer), so nothing can spin forever. */
+/** Every request gives up after this long, so nothing can spin forever. */
 export const REQUEST_TIMEOUT_MS = 30000;
-const UPLOAD_TIMEOUT_MS = 125000;
 export const TIMEOUT_MESSAGE = "The server didn't respond. Please try again.";
 
-async function request(method, path, body, { raw = false, timeout } = {}) {
+async function request(method, path, body) {
   const headers = {};
   let payload;
-  if (body instanceof FormData) payload = body;
-  else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
+  if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
 
   const ctrl = new AbortController();
-  const ms = timeout ?? (body instanceof FormData ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
-  const timer = setTimeout(() => ctrl.abort(), ms);
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   let res;
   try {
     // The session lives in an httpOnly cookie; `include` sends it (also when the API is on another origin).
     res = await fetch(`${BASE}/api${path}`, { method, headers, body: payload, credentials: 'include', signal: ctrl.signal });
-    if (raw) return await finishRaw(res, path);
     return await finish(res, path);
   } catch (e) {
     if (e instanceof ApiError) throw e;
@@ -40,12 +36,6 @@ async function request(method, path, body, { raw = false, timeout } = {}) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-async function finishRaw(res, path) {
-  if (res.status === 401 && !path.startsWith('/auth/')) onUnauthorized();
-  if (!res.ok) { const d = await res.json().catch(() => ({})); throw new ApiError(d.error || res.statusText, res.status, d); }
-  return res;
 }
 
 async function finish(res, path) {
@@ -58,7 +48,7 @@ async function finish(res, path) {
 }
 
 export const api = {
-  get: (p, opts) => request('GET', p, undefined, opts),
+  get: (p) => request('GET', p),
   post: (p, b) => request('POST', p, b ?? {}),
   patch: (p, b) => request('PATCH', p, b),
   put: (p, b) => request('PUT', p, b),

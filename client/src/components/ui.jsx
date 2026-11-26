@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { I } from '../lib/icons.js';
 import { SYMBOL } from '../lib/format.js';
 import { useApp } from '../context/AppContext.jsx';
@@ -90,26 +90,55 @@ export function Switch({ on, onChange, label }) {
   return <button type="button" className={`sw ${on ? '' : 'off'}`} role="switch" aria-checked={on} aria-label={label} onClick={() => onChange(!on)} />;
 }
 
+const FIELD = 'input:not([type="hidden"]):not([hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])';
+const FOCUSABLE = `${FIELD}, button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])`;
+
+/**
+ * The one pop-up window for forms: centered over a dimmed, blurred page (a bottom sheet on phones),
+ * title + close button. Escape or a click on the backdrop closes it, Tab stays inside, focus goes
+ * to the first field and back to whatever opened it on close. Children mount only while open, so
+ * a form inside starts fresh each time.
+ */
 export function Modal({ open, onClose, title, children, width = 460 }) {
   const ref = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const titleId = useId();
+
   useEffect(() => {
     if (!open) return undefined;
     const prev = document.activeElement;
-    ref.current?.querySelector('input,select,button')?.focus();
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    ref.current?.addEventListener('keydown', onKey);
     const node = ref.current;
-    return () => { node?.removeEventListener('keydown', onKey); prev?.focus?.(); };
-  }, [open, onClose]);
+    (node?.querySelector(`.modal-body ${FIELD}`) || node?.querySelector('.modal-body button') || node?.querySelector('button'))?.focus();
+    const onKey = (e) => {
+      // Menus and inputs inside that handle Escape themselves call preventDefault / stopPropagation.
+      if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); closeRef.current(); return; }
+      if (e.key !== 'Tab' || !node) return;
+      const list = [...node.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!list.length) return;
+      const firstEl = list[0], lastEl = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); firstEl.focus(); }
+    };
+    node?.addEventListener('keydown', onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      node?.removeEventListener('keydown', onKey);
+      document.body.style.overflow = overflow;
+      if (prev instanceof HTMLElement && prev.isConnected) prev.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
   return (
     <div className="modal-back" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={ref} className="card modal toast" role="dialog" aria-modal="true" aria-label={title} style={{ maxWidth: width }}>
+      <div ref={ref} className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} style={{ maxWidth: width }}>
         <div className="modal-head">
-          <span className="modal-title">{title}</span>
+          <h2 className="modal-title" id={titleId}>{title}</h2>
           <button type="button" className="x-btn" aria-label="Close" onClick={onClose}><Icon d={I.close} size={18} /></button>
         </div>
-        {children}
+        <div className="modal-body">{children}</div>
       </div>
     </div>
   );

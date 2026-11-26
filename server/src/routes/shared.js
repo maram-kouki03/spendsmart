@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { many, one, query, insertRows, tx } from '../db.js';
-import { ah, parse, HttpError, round2, initials, money, uuidParam, isUuid } from '../lib/util.js';
-import { CATEGORIES, getActiveSource, monthSpendByCategory, notify } from '../lib/finance.js';
+import { ah, parse, HttpError, round2, initials, money, uuidParam, isUuid, localYmd, DEFAULT_TZ } from '../lib/util.js';
+import { CATEGORIES, getActiveSource, notify } from '../lib/finance.js';
+import { visiblePlans } from '../lib/plans.js';
+import { viewsFor } from './plans.js';
 import {
   who, normEmail, maskEmail, areContacts, isActiveMember, checkInviteQuota, logInviteSend,
   cancelPairSplits, cancelGroupSplits, removeFromGroup, contactInviteNote, groupInviteNote, emailJoinInvite,
@@ -22,7 +24,7 @@ const SPLIT_SELECT = `
     join public.profiles pf on pf.id = s.from_user
     join public.profiles pt on pt.id = s.to_user`;
 
-/** People, groups, balances, shared budgets and pending requests. */
+/** People, groups, balances, savings plans and pending requests. */
 r.get('/shared', ah(async (req, res) => {
   const uid = req.user.id;
   const [contacts, memberOf, splits] = await Promise.all([
@@ -41,7 +43,7 @@ r.get('/shared', ah(async (req, res) => {
 
   const groupIds = memberOf.map((m) => m.group_id);
   const contactIds = contacts.map((c) => c.contact.id);
-  const [groups, sbs] = await Promise.all([
+  const [groups, planRows] = await Promise.all([
     groupIds.length
       ? many(
         `select g.id, g.name, g.owner_id,
@@ -61,43 +63,11 @@ r.get('/shared', ah(async (req, res) => {
         [groupIds]
       )
       : [],
-    // Shared budgets I can see: 1:1 budgets with a current contact, and my active groups' budgets.
-    many(
-      `select b.*, coalesce((select json_agg(json_build_object('user_id', l.user_id, 'monthly_limit', l.monthly_limit))
-                               from public.shared_budget_limits l where l.shared_budget_id = b.id), '[]'::json) as limits
-         from public.shared_budgets b
-        where (b.created_by = $1 and b.partner_id = any($3::uuid[]))
-           or (b.partner_id = $1 and b.created_by = any($3::uuid[]))
-           or b.group_id = any($2::uuid[])`,
-      [uid, groupIds, contactIds]
-    )
+    // Savings plans I can see: 1:1 plans with a current contact, and my active groups' plans.
+    visiblePlans(uid, contactIds, groupIds)
   ]);
 
-  // Monthly spend per user — only fetched for people who opted in to a budget with me.
-  const spendCache = {};
-  const spendOf = async (userId, cat) => {
-    if (!spendCache[userId]) spendCache[userId] = monthSpendByCategory(userId);
-    return (await spendCache[userId])[cat] || 0;
-  };
-  const nameOf = {};
-  contacts.forEach((c) => { nameOf[c.contact.id] = who(c.contact); });
-  groups.forEach((g) => g.members.forEach((m) => { nameOf[m.user.id] = who(m.user); }));
-
-  /**
-   * Someone else's spending is shown only when they have set their own limit on this budget
-   * (that's their opt-in). Until then their row says "waiting" and carries no numbers.
-   */
-  async function budgetView(b, memberIds) {
-    const rows = [];
-    for (const id of memberIds) {
-      const lim = b.limits.find((l) => l.user_id === id);
-      const isMe = id === uid;
-      const name = isMe ? 'Me' : (nameOf[id] || 'Member');
-      if (!isMe && !lim) { rows.push({ user_id: id, name, isMe, waiting: true, spent: null, limit: null }); continue; }
-      rows.push({ user_id: id, name, isMe, waiting: false, spent: await spendOf(id, b.category), limit: lim ? Number(lim.monthly_limit) : null });
-    }
-    return { id: b.id, name: b.name, category: b.category, rows, waitingFor: rows.filter((x) => x.waiting).map((x) => x.name) };
-  }
+  const plans = await viewsFor(planRows, uid, localYmd(new Date(), req.profile?.timezone || DEFAULT_TZ));
 
   const people = [];
   for (const c of contacts) {
@@ -108,10 +78,9 @@ r.get('/shared', ah(async (req, res) => {
       if (s.from_user === them && s.to_user === uid) iOwe += Number(s.share_amount);
       if (s.from_user === uid && s.to_user === them) theyOwe += Number(s.share_amount);
     }
-    const mine = sbs.filter((b) => (b.created_by === uid && b.partner_id === them) || (b.created_by === them && b.partner_id === uid));
     people.push({ kind: 'person', id: c.id, user_id: them, name: who(c.contact), email: c.contact.email, initials: initials(c.contact.full_name, c.contact.email),
       relation: c.relation, iOwe: round2(iOwe), theyOwe: round2(theyOwe),
-      budgets: await Promise.all(mine.map((b) => budgetView(b, [uid, them]))) });
+      plans: plans.filter((p) => !p.group_id && (p.created_by === them || p.partner_id === them)) });
   }
 
   const groupViews = [];
@@ -129,7 +98,7 @@ r.get('/shared', ah(async (req, res) => {
     groupViews.push({ kind: 'group', id: g.id, name: g.name, owner, members, invited,
       pending: latest ? { title: latest.title, share: Number(latest.share_amount) } : null,
       pendingCount: pending.length,
-      budgets: await Promise.all(sbs.filter((b) => b.group_id === g.id).map((b) => budgetView(b, members.map((m) => m.user_id)))) });
+      plans: plans.filter((p) => p.group_id === g.id) });
   }
 
   const shape = (s) => ({ id: s.id, title: s.title, category: s.category, total: Number(s.total_amount), share: Number(s.share_amount), status: s.status,
@@ -139,7 +108,9 @@ r.get('/shared', ah(async (req, res) => {
   res.json({
     people, groups: groupViews,
     incoming: splits.filter((s) => s.to_user === uid && s.status === 'pending').map(shape),
-    outgoing: splits.filter((s) => s.from_user === uid).slice(0, 20).map(shape)
+    outgoing: splits.filter((s) => s.from_user === uid).slice(0, 20).map(shape),
+    // Every split I sent or received (newest first), for the per-person history.
+    history: splits.map(shape)
   });
 }));
 
@@ -202,7 +173,7 @@ r.post('/contacts', ah(async (req, res) => {
   if (emailTo) emailJoinInvite({ to: emailTo, from: me });
 }));
 
-/** Remove a contact: gone on both sides, pending 1:1 splits cancelled, shared budgets hidden. History stays. */
+/** Remove a contact: gone on both sides, pending 1:1 splits cancelled, savings plans together ended (each person refunded to their own card). History stays. */
 r.delete('/contacts/:id', ah(async (req, res) => {
   await tx(async (c) => {
     const row = await one('select contact_id from public.contacts where id = $1 and owner_id = $2 for update', [req.params.id, req.user.id], c);
@@ -213,6 +184,11 @@ r.delete('/contacts/:id', ah(async (req, res) => {
       [req.user.id, them], c
     );
     await cancelPairSplits(c, req.user.id, them);
+    // Your savings plans together end: each person's contributions go back to the card they came from.
+    await query(
+      'delete from public.shared_plans where (created_by = $1 and partner_id = $2) or (created_by = $2 and partner_id = $1)',
+      [req.user.id, them], c
+    );
     await query(
       `update public.contact_invites set status = 'cancelled', responded_at = now()
         where status = 'pending' and ((from_user = $1 and to_user = $2) or (from_user = $2 and to_user = $1))`,
@@ -586,49 +562,6 @@ r.post('/settle', ah(async (req, res) => {
     return pending.length;
   });
   res.json({ settled });
-}));
-
-// ---------------------------------------------------------------------------
-// Shared budgets — only with accepted contacts / active group members
-// ---------------------------------------------------------------------------
-
-/** May `uid` see and change this shared budget right now? */
-async function canUseBudget(b, uid, ex) {
-  if (b.group_id) return isActiveMember(b.group_id, uid, ex);
-  if (b.created_by !== uid && b.partner_id !== uid) return false;
-  return areContacts(b.created_by, b.partner_id, ex);
-}
-
-r.post('/shared-budgets', ah(async (req, res) => {
-  const body = parse(z.object({
-    name: z.string().trim().min(1).max(60), category: z.enum(CATEGORIES), my_limit: z.coerce.number().positive().max(1e8),
-    partner_id: z.string().uuid().optional(), group_id: z.string().uuid().optional()
-  }).refine((b) => !!b.partner_id !== !!b.group_id, 'Pick a person or a group'), req.body);
-  if (body.group_id && !(await isActiveMember(body.group_id, req.user.id))) throw new HttpError(403, 'Not in this group');
-  if (body.partner_id && !(await areContacts(req.user.id, body.partner_id))) throw new HttpError(403, 'You can only share a budget with people who accepted your invitation');
-  const b = await tx(async (c) => {
-    const row = await one(
-      `insert into public.shared_budgets (created_by, name, category, partner_id, group_id)
-       values ($1, $2, $3, $4, $5) returning *`,
-      [req.user.id, body.name, body.category, body.partner_id || null, body.group_id || null], c
-    );
-    await query('insert into public.shared_budget_limits (shared_budget_id, user_id, monthly_limit) values ($1, $2, $3)', [row.id, req.user.id, body.my_limit], c);
-    return row;
-  });
-  res.status(201).json(b);
-}));
-
-/** Set my limit on a shared budget — this is also how I opt in to sharing my spending in it. */
-r.put('/shared-budgets/:id/limit', ah(async (req, res) => {
-  const body = parse(z.object({ monthly_limit: z.coerce.number().positive().max(1e8) }), req.body);
-  const b = await one('select * from public.shared_budgets where id = $1', [req.params.id]);
-  if (!b || !(await canUseBudget(b, req.user.id))) throw new HttpError(404, 'Shared budget not found');
-  await query(
-    `insert into public.shared_budget_limits (shared_budget_id, user_id, monthly_limit) values ($1, $2, $3)
-     on conflict (shared_budget_id, user_id) do update set monthly_limit = excluded.monthly_limit`,
-    [b.id, req.user.id, body.monthly_limit]
-  );
-  res.json({ ok: true });
 }));
 
 export default r;

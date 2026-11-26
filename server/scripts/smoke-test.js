@@ -10,18 +10,15 @@
  * subscription job for everybody), so prefer a local or staging database.
  */
 import { spawn } from 'node:child_process';
-import { readFile, rmdir, unlink } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { pool, one, many, query, tx } from '../src/db.js';
 import { createStarterSources } from '../src/lib/finance.js';
 import { claimInvites, INVITE_SENT, INVITES_PER_DAY } from '../src/lib/sharing.js';
 import { runSubscriptionJob, JOB_LOCK } from '../src/jobs/subscriptions.js';
-import { UPLOAD_DIR } from '../src/lib/receipts.js';
-import { addDays, localYmd } from '../src/lib/util.js';
+import { addDays, addMonths, localYmd } from '../src/lib/util.js';
 
 const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 4600 + Math.floor(Math.random() * 300);
@@ -29,7 +26,6 @@ const BASE = `http://localhost:${PORT}/api`;
 const TZ = 'Africa/Tunis';
 const PASSWORD = 'smoke-test-password'; // deliberately weak: older passwords must still log in
 const STRONG = 'Tq9!vRw#4mZs';
-const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 
 let failed = 0, passed = 0;
 function check(name, ok, detail = '') {
@@ -44,8 +40,7 @@ async function call(method, p, body) {
   const headers = {};
   if (cookie) headers.cookie = cookie;
   let payload;
-  if (body instanceof FormData) payload = body;
-  else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
+  if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
   const res = await fetch(BASE + p, { method, headers, body: payload });
   const set = res.headers.getSetCookie?.() || [];
   for (const c of set) if (c.startsWith('ss_session=')) cookie = c.split(';')[0];
@@ -94,13 +89,8 @@ async function createUser(tag, email = `smoke+${tag}-${crypto.randomBytes(4).toS
 }
 
 const charges = async (subId) => Number((await one('select count(*) as n from public.transactions where subscription_id = $1', [subId])).n);
+const same = (x, y) => Math.abs(Number(x) - Number(y)) < 0.005;
 const balanceOf = async (sourceId) => Number((await one('select balance from public.source_balances where id = $1', [sourceId])).balance);
-
-/** A session cookie for `u` without logging in (for a Google-only account, which has no password). */
-function sessionFor(u, passwordHash = null) {
-  const pf = crypto.createHash('sha256').update(passwordHash || 'no-password').digest('base64url').slice(0, 16);
-  return `ss_session=${jwt.sign({ sub: u.id, rem: 0, pf }, process.env.JWT_SECRET, { expiresIn: '1h', algorithm: 'HS256' })}`;
-}
 
 /** Strong-password rules on every endpoint that sets a password (never at log-in). */
 async function passwordChecks(users) {
@@ -156,29 +146,6 @@ async function passwordChecks(users) {
   r = await call('POST', '/auth/login', { email: resetUser.email, password: STRONG, remember: false });
   check('log in with the new password', r.status === 200, show(r));
 
-  section('Passwords: change in Settings');
-  const changeUser = await createUser('change'); users.push(changeUser);
-  cookie = '';
-  r = await call('POST', '/auth/login', { email: changeUser.email, password: PASSWORD, remember: false });
-  check('an older weak password still logs in (rules are not applied at log-in)', r.status === 200 && !!cookie, show(r));
-  const change = (new_password, confirm_password) => call('POST', '/auth/change-password', { current_password: PASSWORD, new_password, confirm_password });
-  r = await change('Abcdefgh1', 'Abcdefgh1');
-  check('change to a password without a symbol → 400 weak_password', weak(r, /symbol/), show(r));
-  r = await change(STRONG, 'nope');
-  check('change with a mismatch → 400 password_mismatch', r.status === 400 && r.data?.code === 'password_mismatch', show(r));
-  r = await change(STRONG, STRONG);
-  check('change to a strong password → 200', r.status === 200 && r.data?.ok === true, show(r));
-
-  section('Passwords: Google-only account sets one');
-  const googleUser = await createUser('google'); users.push(googleUser);
-  await query('update public.users set password_hash = null where id = $1', [googleUser.id]);
-  cookie = sessionFor(googleUser);
-  r = await call('POST', '/auth/change-password', { new_password: 'qwerty123', confirm_password: 'qwerty123' });
-  check('set a weak password → 400 weak_password', r.status === 400 && r.data?.code === 'weak_password', show(r));
-  r = await call('POST', '/auth/change-password', { new_password: STRONG });
-  check('set a password without confirm_password → 400 password_mismatch', r.status === 400 && r.data?.code === 'password_mismatch', show(r));
-  r = await call('POST', '/auth/change-password', { new_password: STRONG, confirm_password: STRONG });
-  check('set a strong password → 200', r.status === 200 && r.data?.ok === true, show(r));
   cookie = saved;
 }
 
@@ -207,8 +174,8 @@ async function sharingChecks(a, b, users, aCard) {
     out.length === 2 && out.some((i) => i.email === b.email.toLowerCase()) && out.some((i) => i.email === ghost) && out.every((i) => i.status === 'pending' && !('from' in i) && !('name' in i)), show(r));
   r = await call('POST', '/splits', { target: { type: 'person', user_id: b.id }, title: 'Too early', category: 'Food', amount: 10, source_id: aCard.id });
   check('a split with someone who hasn\'t accepted → 403', r.status === 403, show(r));
-  r = await call('POST', '/shared-budgets', { name: 'Too early', category: 'Groceries', my_limit: 100, partner_id: b.id });
-  check('a shared budget with someone who hasn\'t accepted → 403', r.status === 403, show(r));
+  r = await call('POST', '/shared-plans', { item_name: 'Too early', category: 'More', target_amount: 100, months: 1, partner_id: b.id });
+  check('a savings plan with someone who hasn\'t accepted → 403', r.status === 403, show(r));
   await call('POST', '/contacts', { email: b.email });
   check('inviting the same person again doesn\'t create a second invite', (await pendingInvites()) === 1);
 
@@ -244,27 +211,64 @@ async function sharingChecks(a, b, users, aCard) {
   r = await call('GET', '/shared');
   check('the invitee now sees the sender as a Partner', r.data?.people?.length === 1 && r.data.people[0].user_id === a.id && r.data.people[0].relation === 'Partner', show(r));
 
-  section('Sharing: shared budgets only show spending after opt-in');
-  await call('POST', '/transactions', { kind: 'expense', name: 'B groceries', category: 'Groceries', amount: 33, source_id: bCard.id });
+  section('Saving together: plans, contributions, refunds');
+  const planOf = (resp, id) => [...(resp.data?.people || []).flatMap((x) => x.plans || []), ...(resp.data?.groups || []).flatMap((g) => g.plans || [])].find((x) => x.id === id);
   await as(a);
-  r = await call('POST', '/shared-budgets', { name: 'Smoke groceries', category: 'Groceries', my_limit: 200, partner_id: b.id });
-  const sb = r.data;
-  check('create a shared budget with an accepted contact → 201', r.status === 201 && !!sb?.id, show(r));
-  r = await call('GET', '/shared');
-  let rows = r.data?.people?.[0]?.budgets?.[0]?.rows || [];
-  let theirs = rows.find((x) => x.user_id === b.id);
-  check('before they set a limit: their row is "waiting", with no spending', theirs?.waiting === true && theirs.spent === null && theirs.limit === null, JSON.stringify(rows));
-  check('… and the budget says who it\'s waiting for', r.data?.people?.[0]?.budgets?.[0]?.waitingFor?.[0] === 'Smoke b', JSON.stringify(r.data?.people?.[0]?.budgets?.[0]));
+  r = await call('POST', '/categories', { name: 'Kitchen' });
+  check('add a custom category → 201', r.status === 201 && r.data?.category?.name === 'Kitchen' && r.data.custom.some((c) => c.name === 'Kitchen'), show(r));
+  r = await call('POST', '/categories', { name: 'kitchen' });
+  check('… adding it again (any case) returns the same one', r.status === 201 && r.data.custom.filter((c) => c.name.toLowerCase() === 'kitchen').length === 1, show(r));
+  r = await call('POST', '/shared-plans', { item_name: 'Oven', category: 'Nope', target_amount: 900, months: 3, partner_id: b.id });
+  check('an unknown category → 400', r.status === 400, show(r));
+  r = await call('POST', '/shared-plans', { item_name: 'Oven', category: 'Kitchen', target_amount: 900, months: 3, partner_id: b.id, shares: [{ user_id: a.id, share_pct: 70 }, { user_id: b.id, share_pct: 20 }] });
+  check('shares that don\'t add up to 100 → 400', r.status === 400, show(r));
+  r = await call('POST', '/shared-plans', { item_name: 'Oven', category: 'Kitchen', target_amount: 900, months: 3, partner_id: b.id, my_pct: 50 });
+  const oven = r.data;
+  const meA = oven?.members?.find((m) => m.isMe), themA = oven?.members?.find((m) => !m.isMe);
+  check('create a plan with an accepted contact → 201 (900 in 3 months, 50/50)', r.status === 201 && oven.target === 900 && oven.months === 3 && oven.category === 'Kitchen', show(r));
+  check('… each share is 450, 150/month needed, on track', meA?.target_share === 450 && meA.per_month === 150 && meA.status === 'on_track' && themA?.target_share === 450, JSON.stringify(oven?.members));
+
   await as(b);
+  await call('POST', '/transactions', { kind: 'income', name: 'Smoke salary', amount: 1000, source_id: bCard.id });
+  r = await call('GET', '/notifications');
+  check('the partner is notified about the new plan', r.data?.some((n) => n.type === 'plan' && n.data?.plan_id === oven.id), show(r));
   r = await call('GET', '/shared');
-  rows = r.data?.people?.[0]?.budgets?.[0]?.rows || [];
-  check('the creator set a limit, so the partner sees the creator\'s row', rows.find((x) => x.user_id === a.id)?.waiting === false, JSON.stringify(rows));
-  r = await call('PUT', `/shared-budgets/${sb.id}/limit`, { monthly_limit: 150 });
-  check('the partner opts in by setting their limit', r.status === 200, show(r));
+  check('… and sees it in GET /shared', !!planOf(r, oven.id), show(r));
+  const bBefore = await balanceOf(bCard.id);
+  r = await call('POST', `/shared-plans/${oven.id}/contribute`, { amount: 1e7, source_id: bCard.id });
+  check('contributing more than the card holds → 400 insufficient_funds', r.status === 400 && r.data?.code === 'insufficient_funds', show(r));
+  r = await call('POST', `/shared-plans/${oven.id}/contribute`, { amount: 100, source_id: aCard.id });
+  check('contributing from someone else\'s card → 404', r.status === 404, show(r));
+  r = await call('POST', `/shared-plans/${oven.id}/contribute`, { amount: 100, source_id: bCard.id });
+  const bRow = r.data?.members?.find((m) => m.isMe);
+  check('the partner contributes 100 from their own card', r.status === 200 && bRow?.saved === 100 && bRow.remaining === 350 && r.data.saved === 100, show(r));
+  check('… which lowers their card by 100', same(await balanceOf(bCard.id), bBefore - 100));
+  r = await call('DELETE', `/shared-plans/${oven.id}`, { return_to_source_id: bCard.id });
+  check('only the creator can delete the plan (403)', r.status === 403, show(r));
+
   await as(a);
-  r = await call('GET', '/shared');
-  theirs = (r.data?.people?.[0]?.budgets?.[0]?.rows || []).find((x) => x.user_id === b.id);
-  check('after opting in their spending is shown (33 of 150)', theirs?.waiting === false && theirs.spent === 33 && theirs.limit === 150, JSON.stringify(theirs));
+  const aBefore = await balanceOf(aCard.id);
+  r = await call('POST', `/shared-plans/${oven.id}/contribute`, { amount: 50, source_id: aCard.id });
+  check('the creator contributes 50 from their card', r.status === 200 && r.data.saved === 150 && r.data.pct === 17, show(r));
+  r = await call('GET', '/notifications');
+  check('the creator was notified about the partner\'s contribution', r.data?.some((n) => n.type === 'plan' && /put .* aside for Oven/.test(n.title)), show(r));
+  r = await call('PATCH', `/shared-plans/${oven.id}`, { shares: [{ user_id: a.id, share_pct: 60 }, { user_id: b.id, share_pct: 30 }] });
+  check('editing shares that don\'t add up to 100 → 400', r.status === 400, show(r));
+  r = await call('PATCH', `/shared-plans/${oven.id}`, { target_amount: 1000, months: 4, shares: [{ user_id: a.id, share_pct: 60 }, { user_id: b.id, share_pct: 40 }] });
+  check('edit price, months and shares (60/40) → 200', r.status === 200 && r.data.target === 1000 && r.data.split_mode === 'ratio' && r.data.members.find((m) => m.isMe)?.target_share === 600, show(r));
+  r = await call('DELETE', `/shared-plans/${oven.id}`);
+  check('deleting without saying where my money goes → 400 return_source_required', r.status === 400 && r.data?.code === 'return_source_required', show(r));
+  r = await call('DELETE', `/shared-plans/${oven.id}`, { return_to_source_id: aCard.id });
+  check('delete with a card → my 50 comes back to it', r.status === 200 && r.data?.returned?.amount === 50 && same(await balanceOf(aCard.id), aBefore), show(r));
+  check('… and the partner\'s 100 goes back to their own card', same(await balanceOf(bCard.id), bBefore));
+  check('… the plan is gone', !(await one('select 1 from public.shared_plans where id = $1', [oven.id])));
+
+  // A second plan with money in it, to check what removing the contact does.
+  r = await call('POST', '/shared-plans', { item_name: 'Sofa', category: 'More', target_amount: 300, months: 2, partner_id: b.id });
+  const sofa = r.data;
+  await as(b);
+  await call('POST', `/shared-plans/${sofa.id}/contribute`, { amount: 40, source_id: bCard.id });
+  await as(a);
 
   section('Sharing: removing a contact');
   r = await call('POST', '/splits', { target: { type: 'person', user_id: b.id }, title: 'Smoke dinner', category: 'Food', amount: 40, source_id: aCard.id });
@@ -275,6 +279,7 @@ async function sharingChecks(a, b, users, aCard) {
   r = await call('POST', `/splits/${dinner.id}/accept`, { source_id: bCard.id });
   check('the contact pays one of them', r.status === 200, show(r));
   await as(a);
+  const bPreRemove = await balanceOf(bCard.id);
   r = await call('GET', '/shared');
   r = await call('DELETE', `/contacts/${r.data.people[0].id}`);
   check('remove the contact → 204', r.status === 204, show(r));
@@ -283,9 +288,11 @@ async function sharingChecks(a, b, users, aCard) {
   check('… the paid split stays in history, the pending one is cancelled', statuses[dinner.id] === 'accepted' && statuses[taxi.id] === 'cancelled', JSON.stringify(statuses));
   await as(b);
   r = await call('GET', '/shared');
-  check('… the other person no longer sees them or the shared budget', r.data?.people?.length === 0 && r.data.incoming.length === 0, show(r));
-  r = await call('PUT', `/shared-budgets/${sb.id}/limit`, { monthly_limit: 99 });
-  check('… and can\'t use the hidden shared budget (404)', r.status === 404, show(r));
+  check('… the other person no longer sees them', r.data?.people?.length === 0 && r.data.incoming.length === 0, show(r));
+  check('… their plan together ended and the 40 went back to the contributor\'s card',
+    !(await one('select 1 from public.shared_plans where id = $1', [sofa.id])) && same(await balanceOf(bCard.id), bPreRemove + 40));
+  r = await call('POST', `/shared-plans/${sofa.id}/contribute`, { amount: 5, source_id: bCard.id });
+  check('… and the plan can\'t be used any more (404)', r.status === 404, show(r));
   r = await call('POST', '/splits', { target: { type: 'person', user_id: a.id }, title: 'Nope', category: 'Food', amount: 10, source_id: bCard.id });
   check('… nor send split requests any more (403)', r.status === 403, show(r));
   r = await call('POST', '/settle', { user_id: a.id, source_id: bCard.id });
@@ -303,15 +310,12 @@ async function sharingChecks(a, b, users, aCard) {
       && gv.invited.some((x) => x.email === b.email.toLowerCase()) && gv.invited.some((x) => x.email === ghost) && gv.invited.every((x) => !('name' in x) && !('user_id' in x)), JSON.stringify(gv));
   r = await call('POST', '/splits', { target: { type: 'group', group_id: group.id }, title: 'Rent', category: 'Bills', amount: 90, source_id: aCard.id });
   check('a group split before anyone joined → 400', r.status === 400, show(r));
-  r = await call('POST', '/shared-budgets', { name: 'Flat food', category: 'Food', my_limit: 300, group_id: group.id });
-  const gsb = r.data;
-  check('a group shared budget can be created by an active member', r.status === 201, show(r));
+  r = await call('POST', '/shared-plans', { item_name: 'Flat TV', category: 'Shopping', target_amount: 400, months: 2, group_id: group.id });
+  check('a group plan before anyone else joined → 400', r.status === 400, show(r));
 
   await as(b);
   r = await call('GET', '/shared');
   check('an invited member doesn\'t see the group yet', !r.data?.groups?.some((g) => g.id === group.id), show(r));
-  r = await call('PUT', `/shared-budgets/${gsb.id}/limit`, { monthly_limit: 50 });
-  check('… nor use its shared budget (404)', r.status === 404, show(r));
   r = await call('GET', '/notifications');
   check('the group invitation is in the bell with Accept/Decline (action "group")', r.data?.some((n) => n.type === 'invite' && n.action === 'group' && n.data?.group_id === group.id), show(r));
   r = await call('GET', '/invites');
@@ -321,13 +325,13 @@ async function sharingChecks(a, b, users, aCard) {
   r = await call('GET', '/shared');
   gv = r.data?.groups?.find((g) => g.id === group.id);
   check('now an active member; the other invite is shown masked to non-owners', gv?.members?.length === 2 && gv.invited.length === 1 && gv.invited[0].email.includes('•••') && !gv.invited[0].canCancel, JSON.stringify(gv));
-  let gRows = gv?.budgets?.[0]?.rows || [];
-  check('in the group budget, the new member\'s own row is theirs to set; the owner\'s is shown', gRows.find((x) => x.user_id === a.id)?.waiting === false && gRows.find((x) => x.isMe)?.limit === null, JSON.stringify(gRows));
 
   await as(a);
-  r = await call('GET', '/shared');
-  gRows = r.data?.groups?.find((g) => g.id === group.id)?.budgets?.[0]?.rows || [];
-  check('the owner sees the new member as "waiting" in the group budget', gRows.find((x) => x.user_id === b.id)?.waiting === true, JSON.stringify(gRows));
+  r = await call('POST', '/shared-plans', { item_name: 'Flat TV', category: 'Shopping', target_amount: 400, months: 2, group_id: group.id });
+  const gp = r.data;
+  check('a group plan with 2 active members → 201, equal shares (200 each)', r.status === 201 && gp.split_mode === 'equal' && gp.members.length === 2 && gp.members.every((m) => m.target_share === 200), show(r));
+  r = await call('POST', `/shared-plans/${gp.id}/contribute`, { amount: 20, source_id: aCard.id });
+  check('the owner puts 20 aside for the group plan', r.status === 200, show(r));
   r = await call('POST', '/splits', { target: { type: 'group', group_id: group.id }, title: 'Smoke rent', category: 'Bills', amount: 90, source_id: aCard.id });
   check('a group split goes to active members only (1 request, 45 each)', r.status === 201 && r.data.count === 1 && r.data.share === 45, show(r));
 
@@ -343,13 +347,17 @@ async function sharingChecks(a, b, users, aCard) {
 
   section('Sharing: leaving and removing members');
   await as(b);
-  r = await call('PUT', `/shared-budgets/${gsb.id}/limit`, { monthly_limit: 80 });
-  check('an active member can opt in to the group budget', r.status === 200, show(r));
+  const bBeforeGroup = await balanceOf(bCard.id);
+  r = await call('POST', `/shared-plans/${gp.id}/contribute`, { amount: 30, source_id: bCard.id });
+  check('an active member contributes to the group plan', r.status === 200 && r.data.saved === 50, show(r));
   r = await call('POST', `/groups/${group.id}/leave`);
   check('leave the group → 200', r.status === 200, show(r));
   const rent = await one("select status from public.split_requests where group_id = $1 and title = 'Smoke rent'", [group.id]);
-  const lim = await one('select 1 from public.shared_budget_limits where shared_budget_id = $1 and user_id = $2', [gsb.id, b.id]);
-  check('… their pending group split is cancelled and their budget opt-in removed', rent?.status === 'cancelled' && !lim, JSON.stringify({ rent, lim }));
+  const inPlan = await one('select 1 from public.shared_plan_members where plan_id = $1 and user_id = $2', [gp.id, b.id]);
+  check('… their pending group split is cancelled and they leave the plan', rent?.status === 'cancelled' && !inPlan, JSON.stringify({ rent, inPlan }));
+  check('… with their 30 back on their own card', same(await balanceOf(bCard.id), bBeforeGroup));
+  const left = await many('select share_pct from public.shared_plan_members where plan_id = $1', [gp.id]);
+  check('… and the owner\'s share scaled back up to 100%', left.length === 1 && Number(left[0].share_pct) === 100, JSON.stringify(left));
   r = await call('GET', '/shared');
   check('… and the group is gone from their page', !r.data?.groups?.some((g) => g.id === group.id), show(r));
   await as(a);
@@ -376,6 +384,101 @@ async function sharingChecks(a, b, users, aCard) {
   check('the next one → 429 invite_limit', r.status === 429 && r.data?.code === 'invite_limit', show(r));
   r = await call('POST', '/groups', { name: 'Too many', emails: [`smoke+x1@example.test`] });
   check('group invitations count too (429)', r.status === 429, show(r));
+}
+
+/** Budgets for any period: the current period's dates, what counts as spent, alerts once per period. */
+async function budgetPeriodChecks(me, today, card) {
+  const [y, m] = today.split('-');
+  const monthStart = `${y}-${m}-01`;
+  const monthEnd = addDays(addMonths(monthStart, 1), -1);
+  const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // 0 = Monday
+  const monday = addDays(today, -dow);
+  const created = [];
+  const make = async (body) => {
+    const before = new Set(created);
+    const res = await call('POST', '/budgets', { category: 'Coffee', alert_threshold: 80, ...body });
+    const b = Array.isArray(res.data) ? res.data.find((x) => x.name === body.name && !before.has(x.id)) : null;
+    if (b) created.push(b.id);
+    return { res, b };
+  };
+  const list = async () => (await call('GET', '/budgets')).data || [];
+  const find = async (id) => (await list()).find((b) => b.id === id);
+  let r;
+
+  section('Budgets: periods');
+  const month = await make({ name: 'Smoke month', limit_amount: 500 });
+  check('no period → a monthly budget (201)', month.res.status === 201 && month.b?.period === 'month', show(month.res));
+  check(`… over this calendar month (${monthStart} – ${monthEnd})`, month.b?.period_start === monthStart && month.b?.period_end === monthEnd && month.b?.current === true, JSON.stringify(month.b));
+  check('… with limit_amount (no more monthly_limit)', month.b?.limit_amount === 500 && !('monthly_limit' in (month.b || {})), JSON.stringify(month.b));
+
+  const week = await make({ name: 'Smoke week', limit_amount: 10, period: 'week' });
+  check(`a week budget runs Monday → Sunday (${monday} – ${addDays(monday, 6)})`, week.b?.period_start === monday && week.b?.period_end === addDays(monday, 6), JSON.stringify(week.b));
+
+  const year = await make({ name: 'Smoke year', limit_amount: 5000, period: 'year' });
+  check('a year budget runs Jan 1 → Dec 31', year.b?.period_start === `${y}-01-01` && year.b?.period_end === `${y}-12-31`, JSON.stringify(year.b));
+
+  const anchor = addMonths(monthStart, -4); // blocks: anchor, anchor+3 (contains today), …
+  const quarter = await make({ name: 'Smoke quarter', limit_amount: 900, period: 'quarter', start_date: anchor });
+  check('a 3-month budget uses the block that contains today', quarter.b?.period_start === addMonths(anchor, 3) && quarter.b?.period_end === addDays(addMonths(anchor, 6), -1), JSON.stringify(quarter.b));
+  const q2 = await make({ name: 'Smoke quarter default', limit_amount: 900, period: 'quarter' });
+  check('… without a start date it starts on the 1st of this month', q2.b?.start_date === monthStart && q2.b?.period_start === monthStart, JSON.stringify(q2.b));
+
+  r = await call('POST', '/budgets', { category: 'Coffee', name: 'x', limit_amount: 10, period: 'custom' });
+  check('custom without dates → 400', r.status === 400, show(r));
+  r = await call('POST', '/budgets', { category: 'Coffee', name: 'x', limit_amount: 10, period: 'custom', start_date: today, end_date: today });
+  check('custom with end = start → 400', r.status === 400, show(r));
+  r = await call('POST', '/budgets', { category: 'Coffee', name: 'x', limit_amount: 10, period: 'fortnight' });
+  check('an unknown period → 400', r.status === 400, show(r));
+  const custom = await make({ name: 'Smoke custom', limit_amount: 300, period: 'custom', start_date: addDays(today, -1), end_date: addDays(today, 30) });
+  check('custom dates are used as they are (inclusive)', custom.b?.period_start === addDays(today, -1) && custom.b?.period_end === addDays(today, 30) && custom.b?.current, JSON.stringify(custom.b));
+  const past = await make({ name: 'Smoke past', limit_amount: 300, period: 'custom', start_date: '2024-01-01', end_date: '2024-03-31' });
+  check('a custom budget in the past is not current', past.b?.current === false && past.b?.spent === 0, JSON.stringify(past.b));
+
+  let dbErr = null;
+  try {
+    await query("insert into public.budgets (user_id, category, name, limit_amount, period, start_date, end_date) values ($1, 'Coffee', 'x', 5, 'custom', '2026-02-01', '2026-01-01')", [me.id]);
+  } catch (e) { dbErr = e.code; }
+  check('the database refuses custom dates with end before start (CHECK)', dbErr === '23514', `code ${dbErr}`);
+
+  section('Budgets: spent in the current period, alerts once per period');
+  const spend = (amount, occurred_at) => call('POST', '/transactions', { kind: 'expense', name: 'Smoke coffee', category: 'Coffee', amount, source_id: card.id, ...(occurred_at ? { occurred_at } : {}) });
+  r = await spend(9);
+  const weekHit = r.data?.budgets?.find((b) => b.id === week.b?.id);
+  check('a 9 / 10 expense reports the week budget at 90%', r.status === 201 && weekHit?.pct === 90 && weekHit?.period === 'week', show(r));
+  check('… and not the past custom budget', !r.data?.budgets?.some((b) => b.id === past.b?.id), show(r));
+  const alerts = (id) => many("select type, title, body, dedupe_key from public.notifications where user_id = $1 and data->>'budget_id' = $2 order by created_at", [me.id, id]);
+  let notes = await alerts(week.b.id);
+  check('one threshold alert, keyed to this week', notes.length === 1 && notes[0].type === 'budget' && notes[0].dedupe_key === `budget:${week.b.id}:week:${monday}`, JSON.stringify(notes));
+  check('… worded with "limit", not "monthly limit"', /limit/.test(notes[0]?.title || '') && !/monthly/i.test(`${notes[0]?.title} ${notes[0]?.body}`), JSON.stringify(notes[0]));
+  await spend(2);
+  await spend(1);
+  notes = await alerts(week.b.id);
+  check('going over sends one "over" alert, and only once', notes.filter((n) => n.type === 'over').length === 1 && notes.length === 2, JSON.stringify(notes));
+  const w = await find(week.b.id);
+  check('the week budget has spent 12 (120%, over)', w?.spent === 12 && w?.pct === 120 && w?.status === 'over', JSON.stringify(w));
+
+  r = await spend(5, addDays(monday, -1)); // last Sunday: outside this week
+  const w2 = await find(week.b.id);
+  check('an expense dated before this week does not count for the week budget', r.status === 201 && w2?.spent === 12 && !r.data?.budgets?.some((b) => b.id === week.b.id), `${show(r)} / ${JSON.stringify(w2)}`);
+  check('the past custom budget stays at 0', (await find(past.b.id))?.spent === 0);
+
+  const sum = await call('GET', '/summary');
+  check('the summary counts only budgets of the current periods', sum.data?.budgets?.total === created.length - 1, JSON.stringify(sum.data?.budgets?.total));
+
+  section('Budgets: editing the period');
+  r = await call('PATCH', `/budgets/${month.b.id}`, { period: 'custom' });
+  check('switching to custom without dates → 400', r.status === 400, show(r));
+  r = await call('PATCH', `/budgets/${custom.b.id}`, { end_date: addDays(today, -5) });
+  check('a custom end date before its start → 400', r.status === 400, show(r));
+  r = await call('PATCH', `/budgets/${custom.b.id}`, { period: 'week' });
+  const cw = Array.isArray(r.data) ? r.data.find((b) => b.id === custom.b.id) : null;
+  check('custom → week clears the dates', r.status === 200 && cw?.period === 'week' && cw?.start_date === null && cw?.end_date === null && cw?.period_start === monday, show(r));
+  r = await call('PATCH', `/budgets/${month.b.id}`, { limit_amount: 600 });
+  const mm = Array.isArray(r.data) ? r.data.find((b) => b.id === month.b.id) : null;
+  check('changing only the limit keeps the period', mm?.limit_amount === 600 && mm?.period === 'month', show(r));
+
+  for (const id of created) await call('DELETE', `/budgets/${id}`);
+  await query("delete from public.transactions where user_id = $1 and name = 'Smoke coffee'", [me.id]);
 }
 
 async function main() {
@@ -418,25 +521,19 @@ async function main() {
     check('today → 201', r.status === 201, show(r));
     const incomeTx = r.data?.transaction;
 
-    section('Receipts (type from the file content)');
-    let fd = new FormData();
-    fd.append('file', new Blob([PNG_1PX], { type: 'image/png' }), 'r.png');
-    r = await call('POST', `/transactions/${incomeTx.id}/receipt`, fd);
-    check('a real PNG is accepted', r.status === 200 && /\.png$/.test(r.data?.receipt_path || ''), show(r));
-    fd = new FormData();
-    fd.append('file', new Blob(['this is not an image'], { type: 'image/png' }), 'fake.png');
-    r = await call('POST', `/transactions/${incomeTx.id}/receipt`, fd);
-    check('text labelled image/png is refused (400)', r.status === 400, show(r));
-    fd = new FormData();
-    fd.append('file', new Blob([Buffer.from('GIF89a\x01\x00\x01\x00\x00\x00\x00;', 'binary')], { type: 'image/jpeg' }), 'x.jpg');
-    r = await call('POST', `/transactions/${incomeTx.id}/receipt`, fd);
-    check('a GIF labelled image/jpeg is refused (400)', r.status === 400, show(r));
-    fd = new FormData();
-    fd.append('file', new Blob([Buffer.concat([PNG_1PX, Buffer.alloc(8 * 1024 * 1024)])], { type: 'image/png' }), 'big.png');
-    r = await call('POST', `/transactions/${incomeTx.id}/receipt`, fd);
-    check('a file over 8 MB is refused (400)', r.status === 400, show(r));
+    section('Removed features are gone');
+    r = await call('GET', '/export.csv');
+    check('GET /export.csv → 404', r.status === 404, show(r));
+    r = await call('POST', `/transactions/${incomeTx.id}/receipt`, {});
+    check('POST /transactions/:id/receipt → 404', r.status === 404, show(r));
     r = await call('GET', `/transactions/${incomeTx.id}/receipt`);
-    check('the stored receipt is served as image/png', r.status === 200 && r.headers.get('content-type')?.startsWith('image/png'), `HTTP ${r.status} ${r.headers.get('content-type')}`);
+    check('GET /transactions/:id/receipt → 404', r.status === 404, show(r));
+    r = await call('POST', '/auth/change-password', { current_password: PASSWORD, new_password: STRONG, confirm_password: STRONG });
+    check('POST /auth/change-password → 404', r.status === 404, show(r));
+    r = await call('DELETE', `/transactions/${incomeTx.id}`);
+    check('deleting a transaction still works (204)', r.status === 204, show(r));
+
+    await budgetPeriodChecks(me, today, card1);
 
     section('Goals: deleting gives deposits back');
     r = await call('POST', '/goals', { name: 'Smoke goal', target: 500, initial_saved: 30 });
@@ -504,9 +601,9 @@ async function main() {
     const u = crypto.randomUUID();
     for (const [m, p] of [['DELETE', `/budgets/${u}`], ['PATCH', `/budgets/${u}`], ['DELETE', `/subscriptions/${u}`], ['DELETE', `/transactions/${u}`],
       ['DELETE', '/transactions/not-a-uuid'], ['POST', `/notifications/${u}/read`], ['DELETE', `/contacts/${u}`], ['DELETE', `/groups/${u}`],
-      ['POST', `/splits/${u}/decline`], ['PUT', `/shared-budgets/${u}/limit`], ['POST', `/invites/${u}/accept`], ['POST', `/invites/${u}/decline`],
+      ['POST', `/splits/${u}/decline`], ['PATCH', `/shared-plans/${u}`], ['POST', `/shared-plans/${u}/contribute`], ['DELETE', `/shared-plans/${u}`], ['POST', `/invites/${u}/accept`], ['POST', `/invites/${u}/decline`],
       ['DELETE', `/invites/${u}`], ['POST', `/groups/${u}/accept`], ['POST', `/groups/${u}/decline`], ['POST', `/groups/${u}/leave`]]) {
-      r = await call(m, p, m === 'PATCH' ? { name: 'x' } : m === 'PUT' ? { monthly_limit: 5 } : undefined);
+      r = await call(m, p, p.endsWith('/contribute') ? { amount: 1, source_id: u } : m === 'PATCH' ? { name: 'x' } : undefined);
       check(`${m} ${p.replace(u, ':uuid')} → 404`, r.status === 404, show(r));
     }
 
@@ -595,9 +692,6 @@ async function main() {
   } finally {
     section('Cleanup');
     for (const u of users) {
-      const files = await many('select receipt_path from public.transactions where user_id = $1 and receipt_path is not null', [u.id]).catch(() => []);
-      for (const f of files) await unlink(path.join(UPLOAD_DIR, f.receipt_path)).catch(() => {});
-      await rmdir(path.join(UPLOAD_DIR, u.id)).catch(() => {});
       // Deleting the account cascades to everything it owns (this also checks the FKs allow it).
       try { await query('delete from public.users where id = $1', [u.id]); console.log(`  removed ${u.email}`); }
       catch (e) { failed++; console.log(`  ✗ could not delete ${u.email}: ${e.message}`); }

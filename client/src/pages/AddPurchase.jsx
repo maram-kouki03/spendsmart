@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../lib/api.js';
 import { useApi } from '../lib/useApi.js';
@@ -19,25 +19,16 @@ export default function AddPurchase() {
   const [srcId, setSrcId] = useState('');
   const [date, setDate] = useState(todayISO());
   const [note, setNote] = useState('');
-  const [file, setFile] = useState(null);
-  const [drag, setDrag] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const fileRef = useRef(null);
 
   const src = sources.find((s) => s.id === srcId) || sources[0];
   const amt = Math.max(0, parseFloat(String(amount).replace(',', '.')) || 0);
-  const hits = (budgets || []).filter((b) => b.category === cat).map((b) => {
+  // Budgets of this category whose current period contains the purchase date.
+  const hits = (budgets || []).filter((b) => b.category === cat && date >= b.period_start && date <= b.period_end).map((b) => {
     const after = b.spent + amt;
-    return { ...b, after, afterPct: Math.round((after / b.monthly_limit) * 100) };
+    return { ...b, after, afterPct: Math.round((after / b.limit_amount) * 100) };
   }).filter((b) => amt > 0 && b.afterPct >= b.alert_threshold);
-
-  function pickFile(f) {
-    if (!f) return;
-    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { setErr('Receipts must be a JPG, PNG or WEBP image.'); return; }
-    if (f.size > 8 * 1024 * 1024) { setErr('That photo is over 8 MB.'); return; }
-    setErr(''); setFile(f);
-  }
 
   async function save(e) {
     e.preventDefault();
@@ -48,10 +39,6 @@ export default function AddPurchase() {
     setBusy(true);
     try {
       const res = await api.post('/transactions', { kind: 'expense', name: name.trim(), amount: amt, category: cat, source_id: src.id, occurred_at: date, note: note.trim() || null });
-      if (file) {
-        const fd = new FormData(); fd.append('file', file);
-        await api.post(`/transactions/${res.transaction.id}/receipt`, fd).catch(() => null);
-      }
       refresh();
       nav('/add/saved', { state: res });
     } catch (e2) { setErr(e2.message); setBusy(false); }
@@ -104,21 +91,12 @@ export default function AddPurchase() {
             <div className="f"><label className="lbl" htmlFor="date">Date</label><input className="inp" id="date" type="date" value={date} max={todayISO()} onChange={(e) => setDate(e.target.value)} /></div>
             <div className="f" style={{ flexGrow: 2 }}><label className="lbl" htmlFor="note">Note <span style={{ fontWeight: 400, color: '#6B5A33' }}>(optional)</span></label><input className="inp" id="note" placeholder="For home brewing this month" value={note} onChange={(e) => setNote(e.target.value)} /></div>
           </div>
-
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => pickFile(e.target.files?.[0])} />
-          <button type="button" className={`drop-zone ${drag ? 'drag' : ''}`} onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); pickFile(e.dataTransfer.files?.[0]); }}>
-            <Icon d={I.camera}><circle cx="12" cy="13" r="3.5" /></Icon>
-            {file ? <>Receipt attached <span className="dz-sub">{file.name} · click to change</span></>
-              : <>Add receipt photo <span className="dz-sub">Optional · drag a JPG, PNG or WEBP (max 8 MB) here, or click to browse</span></>}
-          </button>
         </div>
 
         {hits.map((b) => (
           <div key={b.id} className="toast heads-up">
             <Icon d={I.warn} style={{ color: '#B45309' }} />
-            <span><b>Heads up:</b> this takes your {b.name} budget from {fmtShort(b.spent)} to {fmtShort(b.after)} of {fmtShort(b.monthly_limit)} ({b.afterPct}%) — {b.afterPct > 100 ? 'over your limit.' : `past your ${b.alert_threshold}% alert.`}</span>
+            <span><b>Heads up:</b> this takes your {b.name} budget from {fmtShort(b.spent)} to {fmtShort(b.after)} of {fmtShort(b.limit_amount)} ({b.afterPct}%) — {b.afterPct > 100 ? 'over your limit.' : `past your ${b.alert_threshold}% alert.`}</span>
           </div>
         ))}
 

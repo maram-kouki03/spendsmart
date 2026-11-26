@@ -1,21 +1,11 @@
 import { Router } from 'express';
-import multer from 'multer';
 import { z } from 'zod';
-import { many, one, query, tx } from '../db.js';
+import { many, one, tx } from '../db.js';
 import { ah, parse, HttpError, round2, uuidParam, zonedParts, zonedTime, localYmd } from '../lib/util.js';
 import { CATEGORIES, getActiveSource, checkBudgetAlerts } from '../lib/finance.js';
-import { RECEIPT_MAX_BYTES, detectReceiptType, saveReceipt, removeReceipt, receiptFile, receiptMime } from '../lib/receipts.js';
 
 const r = Router();
 uuidParam(r, 'Transaction not found');
-
-const multerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: RECEIPT_MAX_BYTES, files: 1 } }).single('file');
-/** multer with readable 400s ("File too large" → the size limit in MB). */
-const upload = (req, res, next) => multerUpload(req, res, (err) => {
-  if (!err) return next();
-  if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(400, `Receipt photos can be at most ${RECEIPT_MAX_BYTES / 1024 / 1024} MB.`));
-  next(new HttpError(400, `Upload failed: ${err.message}`));
-});
 
 /** Escapes LIKE wildcards so a search term is matched literally. */
 const likeTerm = (s) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -114,7 +104,7 @@ r.post('/transactions', ah(async (req, res) => {
        values ($1, $2, $3, $4, $5, $6, $7, $8) returning *`,
       [req.user.id, body.source_id, body.kind, body.name, category, amount, occurred.toISOString(), body.note || null], c
     );
-    const b = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount, c) : [];
+    const b = body.kind === 'expense' ? await checkBudgetAlerts(req.profile, category, amount, occurred, c) : [];
     return { transaction: t, budgets: b };
   });
   const after = round2(before.balance + (body.kind === 'income' ? amount : -amount));
@@ -122,34 +112,9 @@ r.post('/transactions', ah(async (req, res) => {
 }));
 
 r.delete('/transactions/:id', ah(async (req, res) => {
-  const t = await one('delete from public.transactions where id = $1 and user_id = $2 returning receipt_path', [req.params.id, req.user.id]);
+  const t = await one('delete from public.transactions where id = $1 and user_id = $2 returning id', [req.params.id, req.user.id]);
   if (!t) throw new HttpError(404, 'Transaction not found');
-  await removeReceipt(t.receipt_path);
   res.status(204).end();
-}));
-
-r.post('/transactions/:id/receipt', upload, ah(async (req, res) => {
-  if (!req.file) throw new HttpError(400, 'No file uploaded');
-  const t = await one('select id from public.transactions where id = $1 and user_id = $2', [req.params.id, req.user.id]);
-  if (!t) throw new HttpError(404, 'Transaction not found');
-  // The browser's Content-Type is not trusted: the type comes from the file's own bytes.
-  const mime = await detectReceiptType(req.file.buffer);
-  if (!mime) throw new HttpError(400, 'Use a JPG, PNG or WEBP image.');
-  const receipt_path = await saveReceipt(req.user.id, t.id, mime, req.file.buffer);
-  await query('update public.transactions set receipt_path = $1 where id = $2', [receipt_path, t.id]);
-  res.json({ receipt_path });
-}));
-
-/** Streams the receipt image to its owner. */
-r.get('/transactions/:id/receipt', ah(async (req, res) => {
-  const t = await one('select receipt_path from public.transactions where id = $1 and user_id = $2', [req.params.id, req.user.id]);
-  if (!t) throw new HttpError(404, 'Transaction not found');
-  if (!t.receipt_path) throw new HttpError(404, 'No receipt');
-  res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
-  res.type(receiptMime(t.receipt_path));
-  res.sendFile(receiptFile(t.receipt_path), (err) => {
-    if (err && !res.headersSent) res.status(404).json({ error: 'Receipt file is missing' });
-  });
 }));
 
 export default r;

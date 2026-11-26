@@ -13,7 +13,7 @@ export function activeKey(pathname) {
   return hit ? hit[0] : 'dashboard';
 }
 
-export default function Sidebar() {
+export default function Sidebar({ collapsed = false, onToggle }) {
   const { pathname } = useLocation();
   const { summary } = useApp();
   const active = activeKey(pathname);
@@ -38,31 +38,34 @@ export default function Sidebar() {
   return (
     <div className="side-root">
       <aside className="ss-side">
-        <Link to="/dashboard" className="brand">
-          <LogoMark /><span>SpendSmart</span>
-        </Link>
+        {/* The logo toggles the icon rail; the Dashboard link below still goes home. */}
+        <button type="button" className="brand" onClick={onToggle} aria-controls="side-nav"
+          aria-expanded={!collapsed} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+          <LogoMark /><span className="brand-name">SpendSmart</span>
+        </button>
 
-        <nav aria-label="Main" className="side-nav">
+        <nav aria-label="Main" className="side-nav" id="side-nav">
           <span aria-hidden="true" className="side-pill" style={{ transform: `translateY(${pill * 50}px)` }} />
           {NAV.map((n, i) => {
             const on = i === pill;
             return (
-              <Link key={n[0]} to={n[2]} aria-current={i === a ? 'page' : undefined}
+              <Link key={n[0]} to={n[2]} aria-current={i === a ? 'page' : undefined} aria-label={collapsed ? n[1] : undefined}
                 onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(-1)}
                 className="side-link"
                 style={{ color: on ? '#3B2F12' : '#6B5A33', fontWeight: i === a ? 600 : 500, background: !on && hover === i ? '#FFFBEF' : 'transparent' }}>
                 <svg viewBox="0 0 24 24" className="side-ic" style={{ transform: hover === i ? 'translateY(-3px) rotate(-6deg)' : 'none' }} aria-hidden="true"><path d={n[3]} /></svg>
-                {n[1]}
+                <span className="side-label">{n[1]}</span>
+                {collapsed && <span className="side-tip" aria-hidden="true">{n[1]}</span>}
               </Link>
             );
           })}
         </nav>
 
-        <div className="side-mascot">
+        {!collapsed && <div className="side-mascot">
           <div className="side-bubble">{onTrack ? "You're on track! 🙂" : 'Careful this week!'}</div>
           <Mascot />
           <span className="side-mascot-line">{mascotLine}</span>
-        </div>
+        </div>}
       </aside>
 
       <nav className="ss-tabs" aria-label="Main">

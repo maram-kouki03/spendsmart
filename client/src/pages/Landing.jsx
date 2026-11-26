@@ -150,7 +150,7 @@ export default function Landing() {
         <div className="txt">
           <span className="kick">Budgets that warn you in time</span>
           <h2>A friendly nudge before you overspend.</h2>
-          <p>Set a monthly limit and an alert threshold. The moment you cross it, SpendSmart lets you know — not at the end of the month.</p>
+          <p>Set a limit for a week, a month, a year or your own dates, plus an alert threshold. The moment you cross it, SpendSmart lets you know — not at the end of the period.</p>
         </div>
         <div className="vis" style={{ flexDirection: 'column', gap: 18 }}>
           {bPhase >= 3 && (

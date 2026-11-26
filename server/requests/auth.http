@@ -19,7 +19,7 @@
 @code = 000000
 
 ### Password rules (client/src/lib/passwordRules.js = server/src/lib/passwordRules.js), checked on
-### register, reset-password and change-password (never on login): 8–72 characters, an uppercase
+### register and reset-password (never on login): 8–72 characters, an uppercase
 ### and a lowercase letter, a number, a symbol, no spaces at the start/end, not containing the
 ### email name or first name, not a common password. The confirmation must match.
 ###   400 { error: "<first problem>", code: "weak_password" }  |  400 { code: "password_mismatch" }
@@ -197,38 +197,7 @@ Content-Type: application/json
   "password": "short"
 }
 
-### 16. Change password (signed in, e.g. after 13.) — weak new password → 400 weak_password
-POST {{baseUrl}}/api/auth/change-password
-Content-Type: application/json
-
-{
-  "current_password": "{{password}}",
-  "new_password": "abcdefgh",
-  "confirm_password": "abcdefgh"
-}
-
-### 17. Change password — mismatch → 400 password_mismatch
-POST {{baseUrl}}/api/auth/change-password
-Content-Type: application/json
-
-{
-  "current_password": "{{password}}",
-  "new_password": "Brand-New-Pass-77",
-  "confirm_password": "Brand-New-Pass-78"
-}
-
-### 18. Change password — valid → 200 { ok: true, user }; other sessions are signed out.
-###     A Google-only account sends the same request without current_password ("Set a password").
-POST {{baseUrl}}/api/auth/change-password
-Content-Type: application/json
-
-{
-  "current_password": "{{password}}",
-  "new_password": "Brand-New-Pass-77",
-  "confirm_password": "Brand-New-Pass-77"
-}
-
-### 19. Reset password from the emailed link (paste the token from the link / console) —
+### 16. Reset password from the emailed link (paste the token from the link / console) —
 ###     same rules: weak → 400 weak_password, mismatch → 400 password_mismatch, valid → 200 { user }
 ###     (a rejected password doesn't use up the link)
 POST {{baseUrl}}/api/auth/reset-password

@@ -77,7 +77,7 @@ export default function PurchaseSaved() {
           ) : (
             <div className="card" style={{ flex: '1 1 280px', padding: 22, display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'center' }}>
               <span style={{ fontWeight: 600 }}>No budget for {tx.category} yet</span>
-              <span className="small-muted">Set a monthly limit and we'll nudge you before you overspend.</span>
+              <span className="small-muted">Set a limit and we'll nudge you before you overspend.</span>
               <Link to="/budgets" className="btn-o" style={{ alignSelf: 'flex-start', height: 44 }}>Create a budget</Link>
             </div>
           )}

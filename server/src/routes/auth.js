@@ -41,7 +41,7 @@ function check(schema, input) {
 }
 
 /**
- * Every place that SETS a password (sign-up, reset, change, Google accounts adding one) goes
+ * Every place that SETS a password (sign-up, reset) goes
  * through this: the shared rules, then the confirmation. 400 weak_password / password_mismatch.
  * Never used at log-in, so older passwords keep working.
  */
@@ -438,24 +438,5 @@ r.post('/google', googleLimit, ah(async (req, res) => {
 // ---- signed-in endpoints ----
 
 r.get('/me', requireAuth, (req, res) => res.json({ user: req.user }));
-
-r.post('/change-password', requireAuth, ah(async (req, res) => {
-  const body = check(z.object({
-    current_password: z.string().optional().default(''), new_password: password, confirm_password: confirmField
-  }), req.body);
-  const user = await one('select * from public.users where id = $1', [req.user.id]);
-  // Same rules whether changing a password or adding one to a Google-only account.
-  assertNewPassword(body.new_password, body.confirm_password, { email: user.email, name: req.profile?.full_name || user.full_name });
-  if (user.password_hash) {
-    if (!body.current_password) throw new HttpError(400, 'Enter your current password.');
-    if (!(await bcrypt.compare(body.current_password, user.password_hash))) throw new HttpError(400, 'Your current password is wrong.');
-    if (await bcrypt.compare(body.new_password, user.password_hash)) throw new HttpError(400, 'Pick a password different from your current one.');
-  }
-  const updated = await one('update public.users set password_hash = $1 where id = $2 returning *', [await bcrypt.hash(body.new_password, COST), user.id]);
-  // Other sessions are now invalid (the token carries a password fingerprint); keep this one signed in.
-  issueSession(res, updated, !!req.auth?.rem);
-  await query('update public.password_reset_tokens set used_at = now() where user_id = $1 and used_at is null', [user.id]);
-  res.json({ ok: true, user: publicUser(updated, req.profile) });
-}));
 
 export default r;

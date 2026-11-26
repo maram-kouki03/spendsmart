@@ -52,8 +52,8 @@ Students juggle a bank card, some cash, a few subscriptions they forgot about, a
 ### ✨ Main features
 
 - 💳 **Cards + cash together**: several money sources, each with a live balance computed from its transactions
-- 🧾 **Quick purchase logging**: category, source, date, note and an optional receipt photo
-- 📊 **Budgets with alerts**: monthly limits per category with an alert threshold (e.g. 80 %), sent to the notification bell
+- 🧾 **Quick purchase logging**: category, source, date and an optional note
+- 📊 **Budgets with alerts**: a limit per category for a week, a month, 3 months, a year or custom dates, with an alert threshold (e.g. 80 %) sent to the notification bell once per period
 - 🤝 **Shared expenses**: contacts and groups, split requests (accept / decline), "settle up" and shared budgets
 - 🔁 **Subscriptions**: pause / resume, reminders before renewal, renewals logged automatically as expenses
 - 🎯 **Savings goals**: jars that fill up when you move money in from a card or wallet
@@ -263,8 +263,11 @@ erDiagram
         uuid id PK
         uuid user_id FK
         text category
-        numeric monthly_limit
+        numeric limit_amount
         int alert_threshold
+        text period
+        date start_date
+        date end_date
     }
     subscriptions {
         uuid id PK
@@ -341,7 +344,7 @@ SpendSmart should feel **warm and friendly, not like a bank**. The identity is b
 - 🔐 **Own authentication**: sign-up → 6-digit email code → account creation → login / logout, "remember me", httpOnly JWT cookie, rate limiting, attempt limits
 - 📨 **Email sending** with Nodemailer (falls back to printing codes in the server console when SMTP isn't configured)
 - 🗄️ **Database schema + 4 SQL migrations** and a migration runner with a `--status` mode; RLS locked down on every table
-- 🔌 **REST API for every feature**: sources, transactions, receipts, budgets, subscriptions, goals, shared expenses, notifications, CSV export, sample data
+- 🔌 **REST API for every feature**: sources, transactions, budgets, subscriptions, goals, shared expenses, notifications, sample data
 - 📈 **Dashboard charts** (Recharts) fed by the `/api/analytics` endpoint
 - 🧪 **Manual API test scenarios** for the whole sign-up / login flow in [`server/requests/auth.http`](server/requests/auth.http) (15 requests, including error cases)
 
@@ -355,7 +358,6 @@ SpendSmart should feel **warm and friendly, not like a bank**. The identity is b
 
 - 🧪 **Automated tests** (API integration tests, a few component tests)
 - ☁️ **Deployment**: host the API + built client, configure a production SMTP account and HTTPS
-- 🖼️ **Persistent storage for receipt photos** (currently saved on the server's disk)
 - 📊 More insights (month-to-month comparison, budget history)
 - ♿ Accessibility review and a final usability test with students
 
@@ -417,7 +419,7 @@ cp client/.env.example client/.env
 | `APP_URL` | | Public URL of the React app, used in password-reset links |
 | `GOOGLE_CLIENT_ID` | | Google OAuth client id; leave empty to hide the Google button |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | | SMTP settings for emails. If `SMTP_HOST` is empty, codes and links are printed in the server console |
-| `NODE_ENV`, `TRUST_PROXY`, `UPLOAD_DIR` | | Production options: secure cookies, running behind a proxy, receipt folder |
+| `NODE_ENV`, `TRUST_PROXY` | | Production options: secure cookies, running behind a proxy |
 
 **Client (`client/.env`)**
 
@@ -455,21 +457,18 @@ All routes are under `/api`. Except for the public auth routes, every request ne
 | `POST` | `/auth/login` · `/auth/logout` | Open / close a session |
 | `GET` | `/auth/me` | Current user |
 | `POST` | `/auth/forgot-password` · `/auth/reset-password` | Password reset by emailed link |
-| `POST` | `/auth/change-password` | Change password (signed in) |
 | `GET` · `POST` | `/auth/config` · `/auth/google` | Google sign-in config / sign in with Google |
 | `GET` | `/summary` · `/analytics` | Dashboard totals and chart data |
 | `GET` `PATCH` | `/me` | Profile, currency, notification settings |
 | `GET` `POST` `PATCH` `DELETE` | `/sources` | Cards and wallets |
 | `GET` `POST` `DELETE` | `/transactions` | Expenses and income (filters: kind, source, category, dates, search) |
-| `POST` `GET` | `/transactions/:id/receipt` | Upload / view a receipt photo |
-| `GET` `POST` `PATCH` `DELETE` | `/budgets` | Budgets with this month's spending |
+| `GET` `POST` `PATCH` `DELETE` | `/budgets` | Budgets (week / month / 3 months / year / custom) with the current period's spending |
 | `GET` `POST` `PATCH` `DELETE` | `/subscriptions` | Subscriptions |
 | `GET` `POST` `PATCH` `DELETE` | `/goals` · `POST /goals/:id/contribute` | Savings goals |
 | `GET` `POST` | `/shared` · `/contacts` · `/groups` | People, groups and balances |
 | `POST` | `/splits` · `/splits/:id/accept` · `/splits/:id/decline` · `/settle` | Split requests and settling up |
 | `POST` `PUT` | `/shared-budgets` · `/shared-budgets/:id/limit` | Shared budgets |
 | `GET` `POST` | `/notifications` · `/notifications/read-all` | Notification bell |
-| `GET` | `/export.csv` | Export all data as CSV |
 | `POST` | `/demo/seed` | Load a sample month into an empty account |
 
 ---

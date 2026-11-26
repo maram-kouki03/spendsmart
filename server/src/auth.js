@@ -44,7 +44,6 @@ export function publicUser(u, profile) {
     id: u.id,
     email: u.email,
     full_name: profile?.full_name ?? u.full_name ?? '',
-    has_password: !!u.password_hash,
     google: !!u.google_id,
     email_verified: !!u.email_verified_at,
     created_at: u.created_at

@@ -65,3 +65,25 @@ export function renewText(days) {
   if (days === 1) return 'Renews tomorrow';
   return `Renews in ${days} days`;
 }
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** 'YYYY-MM-DD' → { y, m (0-based), d }, read as a calendar day (no time zone shift). */
+const ymdParts = (ymd) => { const [y, m, d] = ymd.split('-').map(Number); return { y, m: m - 1, d }; };
+
+/** "Nov 1 – 30", "Nov 24 – Dec 1", "Dec 1 – Feb 28" (both 'YYYY-MM-DD', inclusive). */
+export function dateRange(start, end) {
+  const a = ymdParts(start), b = ymdParts(end);
+  const same = a.y === b.y && a.m === b.m;
+  return `${MON[a.m]} ${a.d} – ${same ? '' : `${MON[b.m]} `}${b.d}`;
+}
+
+const PERIOD_NAME = { week: 'This week', month: 'This month', quarter: '3 months', year: 'This year', custom: 'Custom' };
+/**
+ * A budget's period in plain words: "This month · Nov 1 – 30", "Custom · Dec 1 – Feb 28".
+ * A custom budget outside its dates says so ("· ended" / "· not started").
+ */
+export function periodText(b) {
+  const base = `${PERIOD_NAME[b.period] || 'This month'} · ${dateRange(b.period_start, b.period_end)}`;
+  if (b.current) return base;
+  return `${base} · ${b.period_start > todayISO() ? 'not started' : 'ended'}`;
+}

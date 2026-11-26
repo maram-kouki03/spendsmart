@@ -77,6 +77,22 @@ export function addDays(ymd, n) {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
+/** 'YYYY-MM-DD' plus n months (the day is clamped to the month's length: Jan 31 + 1 → Feb 28). */
+export function addMonths(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const first = new Date(Date.UTC(y, m - 1 + n, 1));
+  const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  first.setUTCDate(Math.min(d, last));
+  return first.toISOString().slice(0, 10);
+}
+
+/** Whole months from `a` to `b` (both 'YYYY-MM-DD'). */
+export function monthsBetween(a, b) {
+  const [y1, m1, d1] = a.split('-').map(Number);
+  const [y2, m2, d2] = b.split('-').map(Number);
+  return (y2 - y1) * 12 + (m2 - m1) - (d2 < d1 ? 1 : 0);
+}
+
 /** Start (inclusive) and end (exclusive) of the calendar month containing `d`, in `tz`, as ISO strings. */
 export function monthRange(d = new Date(), tz = DEFAULT_TZ) {
   const p = zonedParts(d, tz);

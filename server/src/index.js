@@ -16,8 +16,8 @@ import budgets from './routes/budgets.js';
 import subscriptions from './routes/subscriptions.js';
 import goals from './routes/goals.js';
 import shared from './routes/shared.js';
+import plans from './routes/plans.js';
 import notifications from './routes/notifications.js';
-import exportcsv from './routes/exportcsv.js';
 import demo from './routes/demo.js';
 import analytics from './routes/analytics.js';
 
@@ -32,18 +32,16 @@ app.use(cors({ origin: origins, credentials: true }));
 /**
  * No request may hang: after REQUEST_TIMEOUT_MS the client gets a 503 JSON answer, even if the
  * handler is still waiting on something. (Whatever the handler does later is ignored: the error
- * handler below skips responses that were already sent.) Receipt uploads get longer, for slow
- * connections. The client gives up after 30 s, so this answers first.
+ * handler below skips responses that were already sent.) The client gives up after 30 s, so this
+ * answers first.
  */
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 25000;
-const UPLOAD_TIMEOUT_MS = 120000;
 app.use('/api', (req, res, next) => {
-  const ms = req.method === 'POST' && /\/receipt$/.test(req.path) ? UPLOAD_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   const timer = setTimeout(() => {
     if (res.headersSent) return;
-    console.warn(`[timeout] ${req.method} ${req.originalUrl} took over ${ms / 1000} s`);
+    console.warn(`[timeout] ${req.method} ${req.originalUrl} took over ${REQUEST_TIMEOUT_MS / 1000} s`);
     res.status(503).json({ error: 'The server took too long. Please try again.', code: 'timeout' });
-  }, ms);
+  }, REQUEST_TIMEOUT_MS);
   const done = () => clearTimeout(timer);
   res.on('finish', done);
   res.on('close', done);
@@ -71,7 +69,7 @@ app.use('/api/auth', auth);
 
 const api = express.Router();
 api.use(requireAuth);
-for (const r of [me, summary, transactions, budgets, subscriptions, goals, shared, notifications, exportcsv, demo, analytics]) api.use(r);
+for (const r of [me, summary, transactions, budgets, subscriptions, goals, shared, plans, notifications, demo, analytics]) api.use(r);
 app.use('/api', api);
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
@@ -111,7 +109,7 @@ app.use((err, req, res, _next) => {
   }
   const pg = typeof err.code === 'string' && /^[0-9A-Z]{5}$/.test(err.code) ? pgStatus(err) : null;
   if (pg) return res.status(pg[0]).json({ error: pg[1] });
-  const status = err.status || err.statusCode || (err.name === 'MulterError' ? 400 : 500);
+  const status = err.status || err.statusCode || 500;
   // An HttpError is a deliberate answer (e.g. 502 email_send_failed): its message is safe to show.
   const deliberate = err instanceof HttpError;
   if (status >= 500 && !deliberate) {

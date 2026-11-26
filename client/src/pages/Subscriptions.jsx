@@ -37,11 +37,6 @@ export default function Subscriptions() {
             <span style={{ fontSize: 22, fontWeight: 700 }}>{next ? next.name : '—'}</span>
             {next && <span className={`st ${next.days <= 3 ? 'near' : 'pend'}`} style={{ alignSelf: 'flex-start' }}>{next.days <= 7 ? renewText(next.days) : shortDate(next.next_renewal)}</span>}
           </div>
-          <div className="card sub-stat">
-            <span className="small-muted">Per year</span>
-            <span style={{ fontSize: 22, fontWeight: 700 }}><Num value={Math.round(total * 1200) / 100} duration={700} /></span>
-            <span style={{ fontSize: 12.5, color: '#6B5A33' }}>at today's prices</span>
-          </div>
         </div>
 
         <ErrorNote>{error}</ErrorNote>
@@ -106,7 +101,7 @@ function SubForm({ initial, onDone }) {
   }
 
   return (
-    <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <form onSubmit={submit} className="modal-body">
       <div><label className="lbl" htmlFor="sn">Name</label><input className="inp" id="sn" value={name} onChange={(e) => setName(e.target.value)} placeholder="StreamBox" /></div>
       <div className="row-wrap" style={{ gap: 10 }}>
         <div style={{ flex: '1 1 120px' }}><label className="lbl" htmlFor="sp">Price / month</label><input className="inp" id="sp" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="12.99" /></div>

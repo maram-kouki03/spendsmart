@@ -13,6 +13,7 @@ const KIND = {
   subscription: { bg: '#57400A', fg: '#FFF0B3', d: I.play, fill: true },
   split: { bg: '#FBCFE8', fg: '#9D174D', d: 'M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM2.5 20c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5' },
   invite: { bg: '#E0E7FF', fg: '#3730A3', d: 'M9 4.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM2.5 20c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5M19 8v6M16 11h6' },
+  plan: { bg: '#FFF0B3', fg: '#8A6406', d: I.wallet },
   info: { bg: '#FDF3D2', fg: '#8A6406', d: I.bell }
 };
 

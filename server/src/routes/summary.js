@@ -61,7 +61,11 @@ r.get('/summary', ah(async (req, res) => {
     sources: sources.map((s) => ({ ...s, last: lastBySource[s.id] || null })),
     archivedSources: allSources.filter((s) => s.archived),
     upcoming,
-    budgets: { total: budgets.length, under: budgets.filter((b) => b.status !== 'over').length, alerts: budgets.filter((b) => b.status !== 'under') },
+    // Only budgets whose period is running now (a custom budget may be over or not started yet).
+    budgets: (() => {
+      const live = budgets.filter((b) => b.current);
+      return { total: live.length, under: live.filter((b) => b.status !== 'over').length, alerts: live.filter((b) => b.status !== 'under') };
+    })(),
     unread: unread.count || 0
   });
 }));

@@ -56,11 +56,11 @@ r.post('/demo/seed', ah(async (req, res) => {
     ]);
 
     await insertRows(c, 'budgets', [
-      { user_id: uid, category: 'Coffee', name: 'Coffee', monthly_limit: 115, alert_threshold: 80 },
-      { user_id: uid, category: 'Food', name: 'Restaurants', monthly_limit: 200, alert_threshold: 80 },
-      { user_id: uid, category: 'Makeup', name: 'Lipstick & makeup', monthly_limit: 45, alert_threshold: 90 },
-      { user_id: uid, category: 'Groceries', name: 'Weekly groceries', monthly_limit: 350, alert_threshold: 85 },
-      { user_id: uid, category: 'Transport', name: 'Taxi & bus', monthly_limit: 80, alert_threshold: 80 }
+      { user_id: uid, category: 'Coffee', name: 'Coffee', limit_amount: 115, alert_threshold: 80 },
+      { user_id: uid, category: 'Food', name: 'Restaurants', limit_amount: 200, alert_threshold: 80 },
+      { user_id: uid, category: 'Makeup', name: 'Lipstick & makeup', limit_amount: 45, alert_threshold: 90 },
+      { user_id: uid, category: 'Groceries', name: 'Weekly groceries', limit_amount: 350, alert_threshold: 85 },
+      { user_id: uid, category: 'Transport', name: 'Taxi & bus', limit_amount: 80, alert_threshold: 80 }
     ]);
 
     await insertRows(c, 'subscriptions', [
