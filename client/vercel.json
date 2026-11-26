@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://RENDER_URL.onrender.com/api/:path*"
+      "destination": "https://spendsmart-api-0y3b.onrender.com/api/:path*"
     },
     {
       "source": "/(.*)",
